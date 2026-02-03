@@ -64,109 +64,117 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
         img.onload = () => {
             const src = cv.imread(img);
 
-            // 1. Detection Phase (Higher Robustness)
+            // 1. DOWNSCALE FOR DETECTION (Crucial for speed and robustness)
+            let detectionSrc = new cv.Mat();
+            const scaleFactor = 800 / src.cols; // Work at 800px width
+            const dSize = new cv.Size(src.cols * scaleFactor, src.rows * scaleFactor);
+            cv.resize(src, detectionSrc, dSize, 0, 0, cv.INTER_AREA);
+
+            // 2. Pre-processing
             let gray = new cv.Mat();
-            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+            cv.cvtColor(detectionSrc, gray, cv.COLOR_RGBA2GRAY, 0);
+            cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
-            // Bilateral Filter for noise reduction while keeping edges
-            let filtered = new cv.Mat();
-            cv.bilateralFilter(gray, filtered, 9, 75, 75, cv.BORDER_DEFAULT);
+            let edges = new cv.Mat();
+            cv.Canny(gray, edges, 75, 200);
 
-            // Thresholding to find the document against background
-            let thresh = new cv.Mat();
-            cv.adaptiveThreshold(filtered, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 115, 4);
+            // Dilate to close gaps
+            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+            cv.dilate(edges, edges, kernel);
 
-            // Dilate to close any small gaps in borders
-            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            let dilated = new cv.Mat();
-            cv.dilate(thresh, dilated, kernel);
-
+            // 3. Find Contours
             let contours = new cv.MatVector();
             let hierarchy = new cv.Mat();
-            cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+            cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
             let maxArea = 0;
             let maxContour = null;
 
-            // Sort and find biggest quad
             for (let i = 0; i < contours.size(); ++i) {
                 let cnt = contours.get(i);
                 let area = cv.contourArea(cnt);
-                if (area > 10000) { // Minimum size threshold
+                const minArea = (detectionSrc.cols * detectionSrc.rows) * 0.05; // Min 5% of screen
+
+                if (area > minArea) {
                     let peri = cv.arcLength(cnt, true);
                     let approx = new cv.Mat();
                     cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
 
-                    // If it has 4 points and is larger than previous max
                     if (approx.rows === 4 && area > maxArea) {
-                        maxArea = area;
-                        if (maxContour) maxContour.delete();
-                        maxContour = approx;
+                        if (cv.isContourConvex(approx)) {
+                            maxArea = area;
+                            if (maxContour) maxContour.delete();
+                            maxContour = approx;
+                        } else {
+                            approx.delete();
+                        }
                     } else {
                         approx.delete();
                     }
                 }
             }
 
-            // 2. Warping/Cropping Phase
-            let finalImage;
+            // 4. Warping Phase
+            let finalImage = new cv.Mat();
+
             if (maxContour) {
-                // Prepare points for transform
+                // Get points from detection (small scale)
                 let pts = [];
                 for (let i = 0; i < 4; i++) {
                     pts.push({ x: maxContour.data32S[i * 2], y: maxContour.data32S[i * 2 + 1] });
                 }
 
-                // Sorting points accurately for perspective transform
+                // Sort points: TL, TR, BR, BL
                 let sortedPts = new Array(4);
                 let sums = pts.map(p => p.x + p.y);
                 let diffs = pts.map(p => p.y - p.x);
 
-                sortedPts[0] = pts[sums.indexOf(Math.min(...sums))]; // Top-Left
-                sortedPts[2] = pts[sums.indexOf(Math.max(...sums))]; // Bottom-Right
-                sortedPts[1] = pts[diffs.indexOf(Math.min(...diffs))]; // Top-Right
-                sortedPts[3] = pts[diffs.indexOf(Math.max(...diffs))]; // Bottom-Left
+                sortedPts[0] = pts[sums.indexOf(Math.min(...sums))]; // TL
+                sortedPts[2] = pts[sums.indexOf(Math.max(...sums))]; // BR
+                sortedPts[1] = pts[diffs.indexOf(Math.min(...diffs))]; // TR
+                sortedPts[3] = pts[diffs.indexOf(Math.max(...diffs))]; // BL
 
-                // Calculate real aspect ratio for the output image
-                const w1 = Math.hypot(sortedPts[1].x - sortedPts[0].x, sortedPts[1].y - sortedPts[0].y);
-                const w2 = Math.hypot(sortedPts[2].x - sortedPts[3].x, sortedPts[2].y - sortedPts[3].y);
-                const h1 = Math.hypot(sortedPts[3].x - sortedPts[0].x, sortedPts[3].y - sortedPts[0].y);
-                const h2 = Math.hypot(sortedPts[2].x - sortedPts[1].x, sortedPts[2].y - sortedPts[1].y);
+                // SCALE POINTS BACK TO ORIGINAL RESOLUTION
+                const realPts = sortedPts.map(p => ({
+                    x: p.x / scaleFactor,
+                    y: p.y / scaleFactor
+                }));
 
-                const maxWidth = Math.max(w1, w2);
-                const maxHeight = Math.max(h1, h2);
+                // Calculate Dimensions
+                const w1 = Math.hypot(realPts[1].x - realPts[0].x, realPts[1].y - realPts[0].y);
+                const w2 = Math.hypot(realPts[2].x - realPts[3].x, realPts[2].y - realPts[3].y);
+                const h1 = Math.hypot(realPts[3].x - realPts[0].x, realPts[3].y - realPts[0].y);
+                const h2 = Math.hypot(realPts[2].x - realPts[1].x, realPts[2].y - realPts[1].y);
 
-                const scale = Math.min(1600 / Math.max(maxWidth, maxHeight), 1.0);
-                const outW = Math.round(maxWidth * scale);
-                const outH = Math.round(maxHeight * scale);
+                const outW = Math.max(w1, w2);
+                const outH = Math.max(h1, h2);
 
                 let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                    sortedPts[0].x, sortedPts[0].y,
-                    sortedPts[1].x, sortedPts[1].y,
-                    sortedPts[2].x, sortedPts[2].y,
-                    sortedPts[3].x, sortedPts[3].y
+                    realPts[0].x, realPts[0].y,
+                    realPts[1].x, realPts[1].y,
+                    realPts[2].x, realPts[2].y,
+                    realPts[3].x, realPts[3].y
                 ]);
 
                 let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
                 let M = cv.getPerspectiveTransform(srcTri, dstTri);
 
-                finalImage = new cv.Mat();
                 cv.warpPerspective(src, finalImage, M, new cv.Size(outW, outH));
 
                 srcTri.delete(); dstTri.delete(); M.delete();
             } else {
-                // Fallback: Just keep original if no document found
-                finalImage = src.clone();
+                // Fallback: Use original
+                src.copyTo(finalImage);
             }
 
             const canvas = document.createElement('canvas');
             cv.imshow(canvas, finalImage);
-            setCroppedImage(canvas.toDataURL('image/jpeg', 0.95)); // Very high quality
+            setCroppedImage(canvas.toDataURL('image/jpeg', 0.95));
             setStage('details');
 
             // Cleanup
-            src.delete(); gray.delete(); filtered.delete(); thresh.delete();
-            kernel.delete(); dilated.delete(); contours.delete(); hierarchy.delete();
+            src.delete(); detectionSrc.delete(); gray.delete(); edges.delete();
+            kernel.delete(); contours.delete(); hierarchy.delete();
             if (maxContour) maxContour.delete();
             finalImage.delete();
         };
