@@ -1,6 +1,7 @@
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, Scissors, FileText, Check, Upload, RefreshCw, ChevronLeft, Loader2, X, Archive, RotateCcw } from 'lucide-react';
+import { Camera, Scissors, FileText, Check, Upload, RefreshCw, ChevronLeft, Loader2, X, Archive, RotateCcw, Zap, ZapOff } from 'lucide-react';
 import jsPDF from 'jspdf';
 import axios from 'axios';
 import { Head, Link } from '@inertiajs/react';
@@ -40,6 +41,10 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
     const [isDocumentDetected, setIsDocumentDetected] = useState(false);
     const [scanStatus, setScanStatus] = useState<string>('Menunggu OpenCV...');
 
+    // Torch State
+    const [torchOn, setTorchOn] = useState(false);
+    const [hasTorch, setHasTorch] = useState(false);
+
     // Metadata State
     const [formData, setFormData] = useState({
         title: '',
@@ -57,6 +62,38 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
         }, 500);
         return () => clearInterval(checkCv);
     }, []);
+
+    // Check Torch Capability
+    useEffect(() => {
+        if (stage !== 'camera') return;
+
+        const checkTorch = setInterval(() => {
+            if (webcamRef.current && webcamRef.current.stream) {
+                const track = webcamRef.current.stream.getVideoTracks()[0];
+                const capabilities = track.getCapabilities();
+                // @ts-ignore
+                if (capabilities.torch) {
+                    setHasTorch(true);
+                }
+                clearInterval(checkTorch);
+            }
+        }, 1000);
+        return () => clearInterval(checkTorch);
+    }, [stage]);
+
+    const toggleTorch = useCallback(() => {
+        if (webcamRef.current && webcamRef.current.stream) {
+            const track = webcamRef.current.stream.getVideoTracks()[0];
+            const newMode = !torchOn;
+
+            // @ts-ignore
+            track.applyConstraints({
+                advanced: [{ torch: newMode }]
+            }).then(() => {
+                setTorchOn(newMode);
+            }).catch(e => console.error(e));
+        }
+    }, [torchOn, webcamRef]);
 
     // Real-time Detection Loop (Interval Based)
     useEffect(() => {
@@ -525,7 +562,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                 />
 
                                 {/* Debug Badge */}
-                                <div className="absolute top-4 left-4 right-4 flex justify-between z-10 pointer-events-none">
+                                <div className="absolute top-4 left-4 z-10 pointer-events-none">
                                     <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/20">
                                         <div className={`text-xs font-mono font-bold flex items-center gap-2 ${isDocumentDetected ? 'text-emerald-400' : 'text-slate-200'}`}>
                                             <div className={`w-2 h-2 rounded-full ${isDocumentDetected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500 animate-pulse'}`} />
@@ -533,6 +570,21 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                         </div>
                                     </div>
                                 </div>
+
+                                {/* Torch Button */}
+                                {hasTorch && (
+                                    <div className="absolute top-4 right-4 z-20">
+                                        <button
+                                            onClick={toggleTorch}
+                                            className={`p-3 rounded-full backdrop-blur-md border transition-all ${torchOn
+                                                    ? 'bg-amber-400/20 border-amber-400/50 text-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.3)]'
+                                                    : 'bg-black/40 border-white/10 text-white hover:bg-black/60'
+                                                }`}
+                                        >
+                                            {torchOn ? <ZapOff className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
+                                        </button>
+                                    </div>
+                                )}
 
                                 <div className="absolute inset-x-0 top-0 h-1/4 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
                                 <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
