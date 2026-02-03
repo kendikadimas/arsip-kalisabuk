@@ -41,6 +41,10 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
     const [isDocumentDetected, setIsDocumentDetected] = useState(false);
     const [scanStatus, setScanStatus] = useState<string>('Menunggu OpenCV...');
 
+    // Manual Corner Adjustment
+    const [manualCorners, setManualCorners] = useState<{ x: number, y: number }[] | null>(null);
+    const draggingCornerRef = useRef<number | null>(null);
+
     // Torch State
     const [torchOn, setTorchOn] = useState(false);
     const [hasTorch, setHasTorch] = useState(false);
@@ -94,6 +98,46 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
             }).catch(e => console.error(e));
         }
     }, [torchOn, webcamRef]);
+
+    // Manual Corner Handlers
+    const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        const activeQuad = manualCorners || detectedQuadRef.current;
+
+        if (activeQuad) {
+            const threshold = 0.1;
+            const closestIdx = activeQuad.findIndex(p => Math.abs(p.x - x) < threshold && Math.abs(p.y - y) < threshold);
+            if (closestIdx !== -1) {
+                draggingCornerRef.current = closestIdx;
+                if (!manualCorners) setManualCorners([...activeQuad]);
+                e.currentTarget.setPointerCapture(e.pointerId);
+            }
+        }
+    };
+
+    const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (draggingCornerRef.current !== null && manualCorners) {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+
+            const newCorners = [...manualCorners];
+            newCorners[draggingCornerRef.current] = { x, y };
+            setManualCorners(newCorners);
+            detectedQuadRef.current = newCorners;
+        }
+    };
+
+    const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        draggingCornerRef.current = null;
+        e.currentTarget.releasePointerCapture(e.pointerId);
+    };
 
     // Real-time Detection Loop (Interval Based)
     useEffect(() => {
@@ -155,44 +199,79 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                         let maxArea = 0;
-                        let foundQuad = false;
-                        const minArea = (workWidth * workHeight) * 0.15; // 15% screen coverage
+                        let maxContourIdx = -1;
+                        const minArea = (workWidth * workHeight) * 0.15;
 
-                        // FIRST PASS: Look for perfect quads
                         for (let i = 0; i < contours.size(); ++i) {
                             let cnt = contours.get(i);
                             let area = cv.contourArea(cnt);
-                            if (area > minArea) {
-                                let peri = cv.arcLength(cnt, true);
-                                let approx = new cv.Mat();
-                                cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-
-                                if (area > maxArea && approx.rows === 4) {
-                                    maxArea = area;
-                                    if (maxContour) maxContour.delete();
-                                    maxContour = approx; // Keep the approx
-                                    foundQuad = true;
-                                } else {
-                                    approx.delete();
-                                }
+                            if (area > minArea && area > maxArea) {
+                                maxArea = area;
+                                maxContourIdx = i;
                             }
                         }
 
-                        // FALLBACK: If no quad, just find the largest blob and extract corners
-                        if (!foundQuad) {
-                            for (let i = 0; i < contours.size(); ++i) {
-                                let cnt = contours.get(i);
-                                let area = cv.contourArea(cnt);
-                                if (area > maxArea && area > minArea) {
-                                    maxArea = area;
-                                    if (maxContour) maxContour.delete();
-                                    maxContour = cnt.clone(); // Use raw contour
+                        let activeQuad = null;
+
+                        if (manualCorners) {
+                            // Manual override
+                            activeQuad = manualCorners;
+                            detectedQuadRef.current = manualCorners;
+                            setIsDocumentDetected(true);
+                            setScanStatus("Mode Manual: Geser Sudut");
+                        } else if (maxContourIdx !== -1) {
+                            // Auto detection
+                            maxContour = contours.get(maxContourIdx);
+                            let peri = cv.arcLength(maxContour, true);
+                            let approx = new cv.Mat();
+                            cv.approxPolyDP(maxContour, approx, 0.02 * peri, true);
+
+                            if (approx.rows === 4) {
+                                const data = approx.data32S;
+                                activeQuad = [
+                                    { x: data[0] / workWidth, y: data[1] / workHeight },
+                                    { x: data[2] / workWidth, y: data[3] / workHeight },
+                                    { x: data[4] / workWidth, y: data[5] / workHeight },
+                                    { x: data[6] / workWidth, y: data[7] / workHeight },
+                                ];
+                            } else {
+                                // Fallback to extreme points
+                                const data = maxContour.data32S;
+                                const numPoints = maxContour.rows;
+                                let tlIdx = 0, trIdx = 0, brIdx = 0, blIdx = 0;
+                                let minSum = Infinity, maxSum = -Infinity, minDiff = Infinity, maxDiff = -Infinity;
+
+                                for (let j = 0; j < numPoints; j++) {
+                                    const x = data[j * 2];
+                                    const y = data[j * 2 + 1];
+                                    const sum = x + y;
+                                    const diff = y - x;
+                                    if (sum < minSum) { minSum = sum; tlIdx = j; }
+                                    if (sum > maxSum) { maxSum = sum; brIdx = j; }
+                                    if (diff < minDiff) { minDiff = diff; trIdx = j; }
+                                    if (diff > maxDiff) { maxDiff = diff; blIdx = j; }
                                 }
+
+                                activeQuad = [tlIdx, trIdx, brIdx, blIdx].map(idx => ({
+                                    x: data[idx * 2] / workWidth,
+                                    y: data[idx * 2 + 1] / workHeight
+                                }));
                             }
+
+                            approx.delete();
+                            detectedQuadRef.current = activeQuad;
+                            setIsDocumentDetected(true);
+                            setScanStatus("DOKUMEN TERDETEKSI!");
+                        } else {
+                            // No document found
+                            detectedQuadRef.current = null;
+                            setIsDocumentDetected(false);
+                            setScanStatus("Mencari Dokumen...");
                         }
 
+                        // Draw Overlay
                         const overlay = canvasRef.current;
-                        if (overlay && maxContour) {
+                        if (overlay) {
                             overlay.width = video.clientWidth;
                             overlay.height = video.clientHeight;
                             const overlayCtx = overlay.getContext('2d');
@@ -200,65 +279,40 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                             if (overlayCtx) {
                                 overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-                                const pts = [];
-                                // Extract 4 corners from ANY contour using sum/diff
-                                const data = maxContour.data32S;
-                                const numPoints = maxContour.rows;
+                                if (activeQuad) {
+                                    const drawPts = activeQuad.map(p => ({
+                                        x: p.x * overlay.width,
+                                        y: p.y * overlay.height
+                                    }));
 
-                                let minSum = Infinity, maxSum = -Infinity;
-                                let minDiff = Infinity, maxDiff = -Infinity;
-                                let tlIdx = 0, trIdx = 0, brIdx = 0, blIdx = 0;
+                                    overlayCtx.beginPath();
+                                    overlayCtx.lineWidth = 4;
+                                    overlayCtx.strokeStyle = manualCorners ? '#fbbf24' : '#10b981';
+                                    overlayCtx.lineCap = 'round';
+                                    overlayCtx.lineJoin = 'round';
 
-                                for (let j = 0; j < numPoints; j++) {
-                                    const x = data[j * 2];
-                                    const y = data[j * 2 + 1];
-                                    const sum = x + y;
-                                    const diff = y - x;
+                                    overlayCtx.moveTo(drawPts[0].x, drawPts[0].y);
+                                    overlayCtx.lineTo(drawPts[1].x, drawPts[1].y);
+                                    overlayCtx.lineTo(drawPts[2].x, drawPts[2].y);
+                                    overlayCtx.lineTo(drawPts[3].x, drawPts[3].y);
+                                    overlayCtx.closePath();
+                                    overlayCtx.stroke();
+                                    overlayCtx.fillStyle = manualCorners ? 'rgba(251, 191, 36, 0.2)' : 'rgba(16, 185, 129, 0.2)';
+                                    overlayCtx.fill();
 
-                                    if (sum < minSum) { minSum = sum; tlIdx = j; }
-                                    if (sum > maxSum) { maxSum = sum; brIdx = j; }
-                                    if (diff < minDiff) { minDiff = diff; trIdx = j; }
-                                    if (diff > maxDiff) { maxDiff = diff; blIdx = j; }
+                                    // Handles
+                                    activeQuad.forEach(p => {
+                                        const cx = p.x * overlay.width;
+                                        const cy = p.y * overlay.height;
+                                        overlayCtx.beginPath();
+                                        overlayCtx.arc(cx, cy, 10, 0, 2 * Math.PI);
+                                        overlayCtx.fillStyle = 'white';
+                                        overlayCtx.fill();
+                                        overlayCtx.lineWidth = 2;
+                                        overlayCtx.strokeStyle = manualCorners ? '#fbbf24' : '#10b981';
+                                        overlayCtx.stroke();
+                                    });
                                 }
-
-                                // Push normalized points directly in order: TL, TR, BR, BL
-                                // (Note: The extraction logic above already identifies them correctly)
-                                const detectedPts = [tlIdx, trIdx, brIdx, blIdx].map(idx => ({
-                                    x: data[idx * 2] / workWidth,
-                                    y: data[idx * 2 + 1] / workHeight
-                                }));
-
-                                detectedQuadRef.current = detectedPts;
-                                setIsDocumentDetected(true);
-                                setScanStatus("DOKUMEN TERDETEKSI! [Stabil]");
-
-                                overlayCtx.beginPath();
-                                overlayCtx.lineWidth = 5;
-                                overlayCtx.strokeStyle = '#10b981';
-                                overlayCtx.lineCap = 'round';
-                                overlayCtx.lineJoin = 'round';
-
-                                const drawPts = detectedQuadRef.current.map(p => ({
-                                    x: p.x * overlay.width,
-                                    y: p.y * overlay.height
-                                }));
-
-                                overlayCtx.moveTo(drawPts[0].x, drawPts[0].y);
-                                overlayCtx.lineTo(drawPts[1].x, drawPts[1].y);
-                                overlayCtx.lineTo(drawPts[2].x, drawPts[2].y);
-                                overlayCtx.lineTo(drawPts[3].x, drawPts[3].y);
-                                overlayCtx.closePath();
-                                overlayCtx.stroke();
-                                overlayCtx.fillStyle = 'rgba(16, 185, 129, 0.2)';
-                                overlayCtx.fill();
-                            }
-                        } else {
-                            detectedQuadRef.current = null;
-                            setIsDocumentDetected(false);
-                            setScanStatus("Mode: Adaptive Threshold... (" + Date.now().toString().slice(-4) + ")");
-                            if (overlay) {
-                                const overlayCtx = overlay.getContext('2d');
-                                overlayCtx?.clearRect(0, 0, overlay.width, overlay.height);
                             }
                         }
 
@@ -272,10 +326,10 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
 
                     } catch (e) {
                         console.error("CV Error", e);
-                        // Emergency cleanup
                         try {
                             if (src && !src.isDeleted()) src.delete();
                             if (gray && !gray.isDeleted()) gray.delete();
+                            if (edges && !edges.isDeleted()) edges.delete();
                         } catch (err) { }
                     } finally {
                         isProcessingRef.current = false;
@@ -569,7 +623,10 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                 {/* Real-time Detection Overlay */}
                                 <canvas
                                     ref={canvasRef}
-                                    className="absolute inset-0 w-full h-full pointer-events-none"
+                                    className="absolute inset-0 w-full h-full cursor-crosshair touch-none"
+                                    onPointerDown={handlePointerDown}
+                                    onPointerMove={handlePointerMove}
+                                    onPointerUp={handlePointerUp}
                                 />
 
                                 {/* Debug Badge */}
