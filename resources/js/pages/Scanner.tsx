@@ -91,14 +91,16 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         src = cv.imread(processCanvas);
                         gray = new cv.Mat();
                         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-                        cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+                        // Increase blur to ignore text details
+                        cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT);
 
                         edges = new cv.Mat();
-                        // Relaxed threshold for broader detection
-                        cv.Canny(gray, edges, 30, 100);
-                        // Dilate to close gaps
+                        // Standard thresholds to catch strong boundaries
+                        cv.Canny(gray, edges, 75, 200);
+
+                        // Dilate more aggressively to close edge gaps
                         let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-                        cv.dilate(edges, edges, kernel);
+                        cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 2);
                         kernel.delete();
 
                         contours = new cv.MatVector();
@@ -106,7 +108,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                         let maxArea = 0;
-                        const minArea = (workWidth * workHeight) * 0.1; // Min 10% of screen
+                        const minArea = (workWidth * workHeight) * 0.1;
 
                         for (let i = 0; i < contours.size(); ++i) {
                             let cnt = contours.get(i);
@@ -114,9 +116,10 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                             if (area > minArea) {
                                 let peri = cv.arcLength(cnt, true);
                                 let approx = new cv.Mat();
-                                cv.approxPolyDP(cnt, approx, 0.03 * peri, true);
+                                cv.approxPolyDP(cnt, approx, 0.02 * peri, true); // Stricter epsilon for better corners
 
-                                if (area > maxArea && approx.rows === 4 && cv.isContourConvex(approx)) {
+                                // Removed isContourConvex check to handle curled paper
+                                if (area > maxArea && approx.rows === 4) {
                                     maxArea = area;
                                     if (maxContour) maxContour.delete();
                                     maxContour = approx;
