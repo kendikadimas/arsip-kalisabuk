@@ -93,20 +93,35 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                 }
             }
 
-            // 2. Warping Phase
+            // 2. Warping/Cropping Phase
             let finalImage;
-            if (maxContour && maxArea > 1000) {
+            if (maxContour && maxArea > 5000) { // Increased threshold to avoid noise
                 // Prepare points for transform
                 let pts = [];
                 for (let i = 0; i < 4; i++) {
                     pts.push({ x: maxContour.data32S[i * 2], y: maxContour.data32S[i * 2 + 1] });
                 }
 
-                // Sort points: top-left, top-right, bottom-right, bottom-left
+                // IMPROVED POINT SORTING (Top-Left, Top-Right, Bottom-Right, Bottom-Left)
+                // 1. Sort by Y-coordinate
                 pts.sort((a, b) => a.y - b.y);
                 let top = pts.slice(0, 2).sort((a, b) => a.x - b.x);
                 let bottom = pts.slice(2, 4).sort((a, b) => a.x - b.x);
                 let sortedPts = [top[0], top[1], bottom[1], bottom[0]];
+
+                // Calculate real aspect ratio for the output image
+                const w1 = Math.hypot(sortedPts[1].x - sortedPts[0].x, sortedPts[1].y - sortedPts[0].y);
+                const w2 = Math.hypot(sortedPts[2].x - sortedPts[3].x, sortedPts[2].y - sortedPts[3].y);
+                const h1 = Math.hypot(sortedPts[3].x - sortedPts[0].x, sortedPts[3].y - sortedPts[0].y);
+                const h2 = Math.hypot(sortedPts[2].x - sortedPts[1].x, sortedPts[2].y - sortedPts[1].y);
+
+                const maxWidth = Math.max(w1, w2);
+                const maxHeight = Math.max(h1, h2);
+
+                // Ensure we don't blow up memory but keep high resolution
+                const scale = Math.min(2000 / Math.max(maxWidth, maxHeight), 1.0);
+                const outW = Math.round(maxWidth * scale);
+                const outH = Math.round(maxHeight * scale);
 
                 let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
                     sortedPts[0].x, sortedPts[0].y,
@@ -115,30 +130,21 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                     sortedPts[3].x, sortedPts[3].y
                 ]);
 
-                const outWidth = 1200; // High quality
-                const outHeight = 1600;
-                let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outWidth, 0, outWidth, outHeight, 0, outHeight]);
+                let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
                 let M = cv.getPerspectiveTransform(srcTri, dstTri);
-                let warped = new cv.Mat();
-                cv.warpPerspective(src, warped, M, new cv.Size(outWidth, outHeight));
 
-                // 3. Post-processing (Binary/Clean Scan effect)
                 finalImage = new cv.Mat();
-                cv.cvtColor(warped, finalImage, cv.COLOR_RGBA2GRAY, 0);
-                cv.adaptiveThreshold(finalImage, finalImage, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 10);
+                cv.warpPerspective(src, finalImage, M, new cv.Size(outW, outH));
 
-                warped.delete(); srcTri.delete(); dstTri.delete(); M.delete();
+                srcTri.delete(); dstTri.delete(); M.delete();
             } else {
-                // Fallback: Just resize if no document found
-                finalImage = new cv.Mat();
-                let dsize = new cv.Size(1200, 1600);
-                cv.resize(src, finalImage, dsize, 0, 0, cv.INTER_AREA);
-                cv.cvtColor(finalImage, finalImage, cv.COLOR_RGBA2GRAY, 0);
+                // Fallback: Just keep original if no document found
+                finalImage = src.clone();
             }
 
             const canvas = document.createElement('canvas');
             cv.imshow(canvas, finalImage);
-            setCroppedImage(canvas.toDataURL('image/jpeg', 0.9)); // Higher quality
+            setCroppedImage(canvas.toDataURL('image/jpeg', 0.95)); // Very high quality
             setStage('details');
 
             src.delete(); dst.delete(); contours.delete(); hierarchy.delete();
