@@ -36,8 +36,9 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
 
     // Live detection ref
     const detectedQuadRef = useRef<{ x: number, y: number }[] | null>(null);
-    const animationRef = useRef<number | null>(null);
+    const isProcessingRef = useRef(false);
     const [isDocumentDetected, setIsDocumentDetected] = useState(false);
+    const [scanStatus, setScanStatus] = useState<string>('Menunggu OpenCV...');
 
     // Metadata State
     const [formData, setFormData] = useState({
@@ -50,51 +51,62 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
         const checkCv = setInterval(() => {
             if (window.cv && window.cv.Mat) {
                 setCvReady(true);
+                setScanStatus('OpenCV Siap. Menunggu Kamera...');
                 clearInterval(checkCv);
             }
         }, 500);
         return () => clearInterval(checkCv);
     }, []);
 
-    // Real-time Detection Loop
+    // Real-time Detection Loop (Interval Based)
     useEffect(() => {
-        if (!cvReady || stage !== 'camera') {
-            if (animationRef.current) cancelAnimationFrame(animationRef.current);
-            return;
-        }
+        if (!cvReady || stage !== 'camera') return;
 
-        const detectFrame = () => {
+        const interval = setInterval(() => {
+            if (isProcessingRef.current) return;
+
             if (webcamRef.current && webcamRef.current.video && webcamRef.current.video.readyState === 4) {
+                isProcessingRef.current = true;
                 const video = webcamRef.current.video;
                 const cv = window.cv;
 
+                // Debug: Update status timestamp to show it's alive
+                // setScanStatus(s => s.startsWith('Scanning') ? s : 'Scanning...'); 
+
                 const processCanvas = document.createElement('canvas');
-                const workWidth = 320;
+                const workWidth = 400; // Slightly higher res for better detection
                 const scale = workWidth / video.videoWidth;
                 const workHeight = video.videoHeight * scale;
 
                 processCanvas.width = workWidth;
                 processCanvas.height = workHeight;
                 const ctx = processCanvas.getContext('2d');
+
                 if (ctx) {
                     ctx.drawImage(video, 0, 0, workWidth, workHeight);
 
+                    let src, gray, edges, contours, hierarchy, maxContour;
+
                     try {
-                        let src = cv.imread(processCanvas);
-                        let gray = new cv.Mat();
+                        src = cv.imread(processCanvas);
+                        gray = new cv.Mat();
                         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
                         cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
-                        let edges = new cv.Mat();
-                        cv.Canny(gray, edges, 50, 150);
+                        edges = new cv.Mat();
+                        // Relaxed threshold for broader detection
+                        cv.Canny(gray, edges, 30, 100);
+                        // Dilate to close gaps
+                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+                        cv.dilate(edges, edges, kernel);
+                        kernel.delete();
 
-                        let contours = new cv.MatVector();
-                        let hierarchy = new cv.Mat();
+                        contours = new cv.MatVector();
+                        hierarchy = new cv.Mat();
                         cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                         let maxArea = 0;
-                        let maxContour = null;
-                        const minArea = (workWidth * workHeight) * 0.05;
+                        const minArea = (workWidth * workHeight) * 0.1; // Min 10% of screen
 
                         for (let i = 0; i < contours.size(); ++i) {
                             let cnt = contours.get(i);
@@ -115,75 +127,91 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         }
 
                         const overlay = canvasRef.current;
-                        if (overlay) {
+                        if (overlay && maxContour) {
                             overlay.width = video.clientWidth;
                             overlay.height = video.clientHeight;
                             const overlayCtx = overlay.getContext('2d');
+
                             if (overlayCtx) {
                                 overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-                                if (maxContour) {
-                                    const pts = [];
-                                    for (let i = 0; i < 4; i++) {
-                                        pts.push({
-                                            x: maxContour.data32S[i * 2] / workWidth,
-                                            y: maxContour.data32S[i * 2 + 1] / workHeight
-                                        });
-                                    }
-
-                                    let sums = pts.map(p => p.x + p.y);
-                                    let diffs = pts.map(p => p.y - p.x);
-                                    const tl = pts[sums.indexOf(Math.min(...sums))];
-                                    const br = pts[sums.indexOf(Math.max(...sums))];
-                                    const tr = pts[diffs.indexOf(Math.min(...diffs))];
-                                    const bl = pts[diffs.indexOf(Math.max(...diffs))];
-
-                                    detectedQuadRef.current = [tl, tr, br, bl];
-                                    setIsDocumentDetected(true);
-
-                                    overlayCtx.beginPath();
-                                    overlayCtx.lineWidth = 4;
-                                    overlayCtx.strokeStyle = '#10b981';
-                                    overlayCtx.lineCap = 'round';
-                                    overlayCtx.lineJoin = 'round';
-
-                                    const drawPts = detectedQuadRef.current.map(p => ({
-                                        x: p.x * overlay.width,
-                                        y: p.y * overlay.height
-                                    }));
-
-                                    overlayCtx.moveTo(drawPts[0].x, drawPts[0].y);
-                                    overlayCtx.lineTo(drawPts[1].x, drawPts[1].y);
-                                    overlayCtx.lineTo(drawPts[2].x, drawPts[2].y);
-                                    overlayCtx.lineTo(drawPts[3].x, drawPts[3].y);
-                                    overlayCtx.closePath();
-                                    overlayCtx.stroke();
-                                    overlayCtx.fillStyle = 'rgba(16, 185, 129, 0.2)';
-                                    overlayCtx.fill();
-                                } else {
-                                    detectedQuadRef.current = null;
-                                    setIsDocumentDetected(false);
+                                const pts = [];
+                                for (let i = 0; i < 4; i++) {
+                                    pts.push({
+                                        x: maxContour.data32S[i * 2] / workWidth,
+                                        y: maxContour.data32S[i * 2 + 1] / workHeight
+                                    });
                                 }
+
+                                let sums = pts.map(p => p.x + p.y);
+                                let diffs = pts.map(p => p.y - p.x);
+                                const tl = pts[sums.indexOf(Math.min(...sums))];
+                                const br = pts[sums.indexOf(Math.max(...sums))];
+                                const tr = pts[diffs.indexOf(Math.min(...diffs))];
+                                const bl = pts[diffs.indexOf(Math.max(...diffs))];
+
+                                detectedQuadRef.current = [tl, tr, br, bl];
+                                setIsDocumentDetected(true);
+                                setScanStatus("DOKUMEN TERDETEKSI! [Stabil]");
+
+                                overlayCtx.beginPath();
+                                overlayCtx.lineWidth = 5;
+                                overlayCtx.strokeStyle = '#10b981';
+                                overlayCtx.lineCap = 'round';
+                                overlayCtx.lineJoin = 'round';
+
+                                const drawPts = detectedQuadRef.current.map(p => ({
+                                    x: p.x * overlay.width,
+                                    y: p.y * overlay.height
+                                }));
+
+                                overlayCtx.moveTo(drawPts[0].x, drawPts[0].y);
+                                overlayCtx.lineTo(drawPts[1].x, drawPts[1].y);
+                                overlayCtx.lineTo(drawPts[2].x, drawPts[2].y);
+                                overlayCtx.lineTo(drawPts[3].x, drawPts[3].y);
+                                overlayCtx.closePath();
+                                overlayCtx.stroke();
+                                overlayCtx.fillStyle = 'rgba(16, 185, 129, 0.2)';
+                                overlayCtx.fill();
+                            }
+                        } else {
+                            detectedQuadRef.current = null;
+                            setIsDocumentDetected(false);
+                            setScanStatus("Mencari Dokumen... (" + Date.now().toString().slice(-4) + ")");
+                            if (overlay) {
+                                const overlayCtx = overlay.getContext('2d');
+                                overlayCtx?.clearRect(0, 0, overlay.width, overlay.height);
                             }
                         }
 
-                        src.delete(); gray.delete(); edges.delete();
-                        contours.delete(); hierarchy.delete();
+                        // Cleanup
+                        if (src) src.delete();
+                        if (gray) gray.delete();
+                        if (edges) edges.delete();
+                        if (contours) contours.delete();
+                        if (hierarchy) hierarchy.delete();
                         if (maxContour) maxContour.delete();
 
                     } catch (e) {
                         console.error("CV Error", e);
+                        // Emergency cleanup
+                        try {
+                            if (src && !src.isDeleted()) src.delete();
+                            if (gray && !gray.isDeleted()) gray.delete();
+                        } catch (err) { }
+                    } finally {
+                        isProcessingRef.current = false;
                     }
+                } else {
+                    isProcessingRef.current = false;
                 }
             }
-            animationRef.current = requestAnimationFrame(detectFrame);
-        };
+        }, 200); // Check every 200ms instead of every frame
 
-        animationRef.current = requestAnimationFrame(detectFrame);
-        return () => {
-            if (animationRef.current) cancelAnimationFrame(animationRef.current);
-        };
+        return () => clearInterval(interval);
     }, [stage, cvReady]);
+
+
 
     const capture = useCallback(() => {
         const image = webcamRef.current?.getScreenshot();
@@ -460,15 +488,24 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                     className="w-full h-full object-cover"
                                     videoConstraints={{ facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }}
                                 />
-                                <div className="absolute inset-x-0 top-0 h-1/4 bg-gradient-to-b from-black/60 to-transparent" />
-                                <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-t from-black/40 to-transparent" />
+                                {/* Real-time Detection Overlay */}
+                                <canvas
+                                    ref={canvasRef}
+                                    className="absolute inset-0 w-full h-full pointer-events-none"
+                                />
 
-                                <div className="absolute inset-16 border-2 border-white/30 rounded-lg flex items-center justify-center pointer-events-none">
-                                    <div className="absolute -top-1 -left-1 w-12 h-12 border-t-4 border-l-4 border-emerald-400 rounded-tl-xl" />
-                                    <div className="absolute -top-1 -right-1 w-12 h-12 border-t-4 border-r-4 border-emerald-400 rounded-tr-xl" />
-                                    <div className="absolute -bottom-1 -left-1 w-12 h-12 border-b-4 border-l-4 border-emerald-400 rounded-bl-xl" />
-                                    <div className="absolute -bottom-1 -right-1 w-12 h-12 border-b-4 border-r-4 border-emerald-400 rounded-br-xl" />
+                                {/* Debug Badge */}
+                                <div className="absolute top-4 left-4 right-4 flex justify-between z-10 pointer-events-none">
+                                    <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/20">
+                                        <div className={`text-xs font-mono font-bold flex items-center gap-2 ${isDocumentDetected ? 'text-emerald-400' : 'text-slate-200'}`}>
+                                            <div className={`w-2 h-2 rounded-full ${isDocumentDetected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500 animate-pulse'}`} />
+                                            {scanStatus}
+                                        </div>
+                                    </div>
                                 </div>
+
+                                <div className="absolute inset-x-0 top-0 h-1/4 bg-gradient-to-b from-black/60 to-transparent pointer-events-none" />
+                                <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
 
                                 {!cvReady && (
                                     <div className="absolute inset-0 bg-black/60 backdrop-blur-md flex flex-col items-center justify-center text-white text-center p-8">
