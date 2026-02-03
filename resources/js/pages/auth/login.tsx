@@ -24,21 +24,21 @@ export default function Login({
 }: Props) {
     return (
         <AuthLayout
-            title="Log in to your account"
-            description="Enter your email and password below to log in"
+            title="Selamat Datang"
+            description="Masukkan email dan kata sandi Anda untuk masuk ke sistem"
         >
-            <Head title="Log in" />
+            <Head title="Masuk" />
 
             <Form
                 {...store.form()}
                 resetOnSuccess={['password']}
-                className="flex flex-col gap-6"
+                className="flex flex-col gap-8 py-4"
             >
                 {({ processing, errors }) => (
                     <>
-                        <div className="grid gap-6">
-                            <div className="grid gap-2">
-                                <Label htmlFor="email">Email address</Label>
+                        <div className="space-y-6">
+                            <div className="space-y-2">
+                                <Label htmlFor="email" className="ml-1 text-slate-600 font-bold text-xs uppercase tracking-wider">Alamat Email</Label>
                                 <Input
                                     id="email"
                                     type="email"
@@ -47,21 +47,22 @@ export default function Login({
                                     autoFocus
                                     tabIndex={1}
                                     autoComplete="email"
-                                    placeholder="email@example.com"
+                                    placeholder="nama@email.com"
+                                    className="h-12 rounded-2xl border-slate-200 bg-slate-50 focus:ring-blue-500 px-4"
                                 />
                                 <InputError message={errors.email} />
                             </div>
 
-                            <div className="grid gap-2">
-                                <div className="flex items-center">
-                                    <Label htmlFor="password">Password</Label>
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between ml-1">
+                                    <Label htmlFor="password" className="text-slate-600 font-bold text-xs uppercase tracking-wider">Kata Sandi</Label>
                                     {canResetPassword && (
                                         <TextLink
                                             href={request()}
-                                            className="ml-auto text-sm"
+                                            className="text-xs font-bold text-blue-600"
                                             tabIndex={5}
                                         >
-                                            Forgot password?
+                                            Lupa kata sandi?
                                         </TextLink>
                                     )}
                                 </div>
@@ -72,37 +73,39 @@ export default function Login({
                                     required
                                     tabIndex={2}
                                     autoComplete="current-password"
-                                    placeholder="Password"
+                                    placeholder="••••••••"
+                                    className="h-12 rounded-2xl border-slate-200 bg-slate-50 focus:ring-blue-500 px-4"
                                 />
                                 <InputError message={errors.password} />
                             </div>
 
-                            <div className="flex items-center space-x-3">
+                            <div className="flex items-center space-x-3 ml-1">
                                 <Checkbox
                                     id="remember"
                                     name="remember"
                                     tabIndex={3}
+                                    className="rounded-md border-slate-300 text-blue-600 focus:ring-blue-500 h-5 w-5"
                                 />
-                                <Label htmlFor="remember">Remember me</Label>
+                                <Label htmlFor="remember" className="text-sm text-slate-500 font-medium">Ingat saya</Label>
                             </div>
 
                             <Button
                                 type="submit"
-                                className="mt-4 w-full"
+                                className="h-14 w-full rounded-2xl bg-blue-600 hover:bg-blue-700 text-lg font-bold shadow-xl shadow-blue-600/20 transition-all active:scale-[0.98]"
                                 tabIndex={4}
                                 disabled={processing}
                                 data-test="login-button"
                             >
-                                {processing && <Spinner />}
-                                Log in
+                                {processing && <Spinner className="mr-2 h-5 w-5" />}
+                                Masuk Sekarang
                             </Button>
                         </div>
 
                         {canRegister && (
-                            <div className="text-center text-sm text-muted-foreground">
-                                Don't have an account?{' '}
-                                <TextLink href={register()} tabIndex={5}>
-                                    Sign up
+                            <div className="text-center text-sm text-slate-500">
+                                Belum punya akun?{' '}
+                                <TextLink href={register()} tabIndex={5} className="font-bold text-blue-600">
+                                    Daftar Gratis
                                 </TextLink>
                             </div>
                         )}
@@ -111,7 +114,7 @@ export default function Login({
             </Form>
 
             {status && (
-                <div className="mb-4 text-center text-sm font-medium text-green-600">
+                <div className="mt-4 p-4 rounded-xl bg-green-50 text-center text-sm font-semibold text-green-700 border border-green-100 italic">
                     {status}
                 </div>
             )}

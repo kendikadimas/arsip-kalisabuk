@@ -63,16 +63,87 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
         const img = new Image();
         img.onload = () => {
             const src = cv.imread(img);
-            const dst = new cv.Mat();
-            const dsize = new cv.Size(595, 842); // A4 roughly
-            cv.resize(src, dst, dsize, 0, 0, cv.INTER_AREA);
+
+            // 1. Detection Phase
+            let dst = new cv.Mat();
+            cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY, 0);
+            cv.GaussianBlur(dst, dst, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+            cv.Canny(dst, dst, 75, 200);
+
+            let contours = new cv.MatVector();
+            let hierarchy = new cv.Mat();
+            cv.findContours(dst, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            let maxArea = 0;
+            let maxContour = null;
+
+            for (let i = 0; i < contours.size(); ++i) {
+                let contour = contours.get(i);
+                let area = cv.contourArea(contour);
+                if (area > maxArea) {
+                    let peri = cv.arcLength(contour, true);
+                    let approx = new cv.Mat();
+                    cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+                    if (approx.rows === 4) {
+                        maxArea = area;
+                        maxContour = approx;
+                    } else {
+                        approx.delete();
+                    }
+                }
+            }
+
+            // 2. Warping Phase
+            let finalImage;
+            if (maxContour && maxArea > 1000) {
+                // Prepare points for transform
+                let pts = [];
+                for (let i = 0; i < 4; i++) {
+                    pts.push({ x: maxContour.data32S[i * 2], y: maxContour.data32S[i * 2 + 1] });
+                }
+
+                // Sort points: top-left, top-right, bottom-right, bottom-left
+                pts.sort((a, b) => a.y - b.y);
+                let top = pts.slice(0, 2).sort((a, b) => a.x - b.x);
+                let bottom = pts.slice(2, 4).sort((a, b) => a.x - b.x);
+                let sortedPts = [top[0], top[1], bottom[1], bottom[0]];
+
+                let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                    sortedPts[0].x, sortedPts[0].y,
+                    sortedPts[1].x, sortedPts[1].y,
+                    sortedPts[2].x, sortedPts[2].y,
+                    sortedPts[3].x, sortedPts[3].y
+                ]);
+
+                const outWidth = 1200; // High quality
+                const outHeight = 1600;
+                let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outWidth, 0, outWidth, outHeight, 0, outHeight]);
+                let M = cv.getPerspectiveTransform(srcTri, dstTri);
+                let warped = new cv.Mat();
+                cv.warpPerspective(src, warped, M, new cv.Size(outWidth, outHeight));
+
+                // 3. Post-processing (Binary/Clean Scan effect)
+                finalImage = new cv.Mat();
+                cv.cvtColor(warped, finalImage, cv.COLOR_RGBA2GRAY, 0);
+                cv.adaptiveThreshold(finalImage, finalImage, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 10);
+
+                warped.delete(); srcTri.delete(); dstTri.delete(); M.delete();
+            } else {
+                // Fallback: Just resize if no document found
+                finalImage = new cv.Mat();
+                let dsize = new cv.Size(1200, 1600);
+                cv.resize(src, finalImage, dsize, 0, 0, cv.INTER_AREA);
+                cv.cvtColor(finalImage, finalImage, cv.COLOR_RGBA2GRAY, 0);
+            }
 
             const canvas = document.createElement('canvas');
-            cv.imshow(canvas, dst);
-            setCroppedImage(canvas.toDataURL('image/jpeg'));
+            cv.imshow(canvas, finalImage);
+            setCroppedImage(canvas.toDataURL('image/jpeg', 0.9)); // Higher quality
             setStage('details');
 
-            src.delete(); dst.delete();
+            src.delete(); dst.delete(); contours.delete(); hierarchy.delete();
+            if (maxContour) maxContour.delete();
+            finalImage.delete();
         };
         img.src = imageSrc;
     };
@@ -171,8 +242,13 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                 <Webcam
                                     ref={webcamRef}
                                     screenshotFormat="image/jpeg"
+                                    screenshotQuality={1}
                                     className="w-full h-full object-cover"
-                                    videoConstraints={{ facingMode: 'environment' }}
+                                    videoConstraints={{
+                                        facingMode: 'environment',
+                                        width: { ideal: 1920 },
+                                        height: { ideal: 1080 }
+                                    }}
                                 />
                                 <div className="absolute inset-x-0 top-0 h-1/4 bg-gradient-to-b from-black/60 to-transparent" />
                                 <div className="absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-t from-black/40 to-transparent" />

@@ -12,21 +12,21 @@ import { store } from '@/routes/register';
 export default function Register() {
     return (
         <AuthLayout
-            title="Create an account"
-            description="Enter your details below to create your account"
+            title="Daftar Akun Baru"
+            description="Silakan isi data diri Anda di bawah ini untuk mulai menggunakan layanan kami"
         >
-            <Head title="Register" />
+            <Head title="Daftar" />
             <Form
                 {...store.form()}
                 resetOnSuccess={['password', 'password_confirmation']}
                 disableWhileProcessing
-                className="flex flex-col gap-6"
+                className="flex flex-col gap-8 py-4"
             >
                 {({ processing, errors }) => (
                     <>
-                        <div className="grid gap-6">
-                            <div className="grid gap-2">
-                                <Label htmlFor="name">Name</Label>
+                        <div className="space-y-6">
+                            <div className="space-y-2">
+                                <Label htmlFor="name" className="ml-1 text-slate-600 font-bold text-xs uppercase tracking-wider">Nama Lengkap</Label>
                                 <Input
                                     id="name"
                                     type="text"
@@ -35,7 +35,8 @@ export default function Register() {
                                     tabIndex={1}
                                     autoComplete="name"
                                     name="name"
-                                    placeholder="Full name"
+                                    placeholder="Contoh: Budi Santoso"
+                                    className="h-12 rounded-2xl border-slate-200 bg-slate-50 focus:ring-blue-500 px-4"
                                 />
                                 <InputError
                                     message={errors.name}
@@ -43,8 +44,8 @@ export default function Register() {
                                 />
                             </div>
 
-                            <div className="grid gap-2">
-                                <Label htmlFor="email">Email address</Label>
+                            <div className="space-y-2">
+                                <Label htmlFor="email" className="ml-1 text-slate-600 font-bold text-xs uppercase tracking-wider">Alamat Email</Label>
                                 <Input
                                     id="email"
                                     type="email"
@@ -52,13 +53,14 @@ export default function Register() {
                                     tabIndex={2}
                                     autoComplete="email"
                                     name="email"
-                                    placeholder="email@example.com"
+                                    placeholder="nama@email.com"
+                                    className="h-12 rounded-2xl border-slate-200 bg-slate-50 focus:ring-blue-500 px-4"
                                 />
                                 <InputError message={errors.email} />
                             </div>
 
-                            <div className="grid gap-2">
-                                <Label htmlFor="password">Password</Label>
+                            <div className="space-y-2">
+                                <Label htmlFor="password" className="ml-1 text-slate-600 font-bold text-xs uppercase tracking-wider">Kata Sandi</Label>
                                 <Input
                                     id="password"
                                     type="password"
@@ -66,15 +68,14 @@ export default function Register() {
                                     tabIndex={3}
                                     autoComplete="new-password"
                                     name="password"
-                                    placeholder="Password"
+                                    placeholder="Minimal 8 karakter"
+                                    className="h-12 rounded-2xl border-slate-200 bg-slate-50 focus:ring-blue-500 px-4"
                                 />
                                 <InputError message={errors.password} />
                             </div>
 
-                            <div className="grid gap-2">
-                                <Label htmlFor="password_confirmation">
-                                    Confirm password
-                                </Label>
+                            <div className="space-y-2">
+                                <Label htmlFor="password_confirmation" className="ml-1 text-slate-600 font-bold text-xs uppercase tracking-wider">Konfirmasi Kata Sandi</Label>
                                 <Input
                                     id="password_confirmation"
                                     type="password"
@@ -82,7 +83,8 @@ export default function Register() {
                                     tabIndex={4}
                                     autoComplete="new-password"
                                     name="password_confirmation"
-                                    placeholder="Confirm password"
+                                    placeholder="Ketik ulang kata sandi"
+                                    className="h-12 rounded-2xl border-slate-200 bg-slate-50 focus:ring-blue-500 px-4"
                                 />
                                 <InputError
                                     message={errors.password_confirmation}
@@ -91,19 +93,20 @@ export default function Register() {
 
                             <Button
                                 type="submit"
-                                className="mt-2 w-full"
+                                className="h-14 w-full rounded-2xl bg-blue-600 hover:bg-blue-700 text-lg font-bold shadow-xl shadow-blue-600/20 transition-all active:scale-[0.98] mt-2"
                                 tabIndex={5}
                                 data-test="register-user-button"
+                                disabled={processing}
                             >
-                                {processing && <Spinner />}
-                                Create account
+                                {processing && <Spinner className="mr-2 h-5 w-5" />}
+                                Daftarkan Sekarang
                             </Button>
                         </div>
 
-                        <div className="text-center text-sm text-muted-foreground">
-                            Already have an account?{' '}
-                            <TextLink href={login()} tabIndex={6}>
-                                Log in
+                        <div className="text-center text-sm text-slate-500">
+                            Sudah punya akun?{' '}
+                            <TextLink href={login()} tabIndex={6} className="font-bold text-blue-600">
+                                Masuk di sini
                             </TextLink>
                         </div>
                     </>
