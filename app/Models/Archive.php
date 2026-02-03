@@ -17,6 +17,16 @@ class Archive extends Model
         'view_link'
     ];
 
+    protected $appends = ['view_url'];
+
+    public function getViewUrlAttribute()
+    {
+        if ($this->drive_file_id) {
+            return route('archives.view', $this->drive_file_id);
+        }
+        return $this->view_link;
+    }
+
     public function category()
     {
         return $this->belongsTo(Category::class);

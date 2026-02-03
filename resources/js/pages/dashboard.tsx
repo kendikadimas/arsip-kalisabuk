@@ -363,7 +363,7 @@ export default function Dashboard({
 
                                         <div className="absolute top-4 right-4 flex items-center gap-1">
                                             <a
-                                                href={archive.view_link}
+                                                href={archive.view_url}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 className="h-8 w-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-blue-50 hover:text-blue-600 transition-all"

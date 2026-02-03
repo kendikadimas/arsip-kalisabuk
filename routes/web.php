@@ -263,4 +263,35 @@ Route::delete('/archives/{archive}', function (Archive $archive) {
     }
 })->middleware(['auth', 'verified'])->name('archives.destroy');
 
+Route::get('/archives/view/{fileId}', function ($fileId) {
+    try {
+        $client = new GoogleClient();
+        if (app()->environment('local')) {
+            $httpClient = new \GuzzleHttp\Client(['verify' => false]);
+            $client->setHttpClient($httpClient);
+        }
+
+        if (config('filesystems.disks.google.refresh_token')) {
+            $client->setClientId(config('filesystems.disks.google.client_id'));
+            $client->setClientSecret(config('filesystems.disks.google.client_secret'));
+            $client->refreshToken(config('filesystems.disks.google.refresh_token'));
+        } else {
+            $client->setAuthConfig(config('filesystems.disks.google.service_account'));
+        }
+
+        $service = new GoogleDrive($client);
+
+        $response = $service->files->get($fileId, ['alt' => 'media']);
+        $content = $response->getBody()->getContents();
+
+        return response($content)
+            ->header('Content-Type', 'application/pdf')
+            ->header('Content-Disposition', 'inline; filename="document.pdf"');
+
+    } catch (\Exception $e) {
+        \Log::error('View Error: ' . $e->getMessage());
+        return abort(404, 'File tidak ditemukan atau akses ditolak.');
+    }
+})->middleware(['auth', 'verified'])->name('archives.view');
+
 require __DIR__ . '/settings.php';

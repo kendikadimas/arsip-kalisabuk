@@ -73,8 +73,11 @@ class ArchiveController extends Controller
                 'data' => $content,
                 'mimeType' => 'application/pdf',
                 'uploadType' => 'multipart',
-                'fields' => 'id, webViewLink'
+                'fields' => 'id, webViewLink, webContentLink'
             ]);
+
+            // For PDF, we want to allow direct viewing. webContentLink is for download,
+            // but we can proxy it in our own route.
 
             // Save DB
             $archive = Archive::create([
@@ -82,7 +85,7 @@ class ArchiveController extends Controller
                 'title' => $request->title,
                 'year' => $request->year,
                 'drive_file_id' => $file->id,
-                'view_link' => $file->webViewLink
+                'view_link' => route('archives.view', $file->id)
             ]);
 
             return response()->json($archive, 201);
