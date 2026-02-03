@@ -91,14 +91,13 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         src = cv.imread(processCanvas);
                         gray = new cv.Mat();
                         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-                        // Increase blur to ignore text details
-                        cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT);
+                        // Use lighter blur
+                        cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
                         edges = new cv.Mat();
-                        // Standard thresholds to catch strong boundaries
-                        cv.Canny(gray, edges, 75, 200);
+                        // Lower Canny thresholds for better sensitivity
+                        cv.Canny(gray, edges, 30, 150);
 
-                        // Dilate more aggressively to close edge gaps
                         let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
                         cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 2);
                         kernel.delete();
@@ -108,23 +107,38 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                         let maxArea = 0;
-                        const minArea = (workWidth * workHeight) * 0.1;
+                        let foundQuad = false;
+                        const minArea = (workWidth * workHeight) * 0.15; // 15% screen coverage
 
+                        // FIRST PASS: Look for perfect quads
                         for (let i = 0; i < contours.size(); ++i) {
                             let cnt = contours.get(i);
                             let area = cv.contourArea(cnt);
                             if (area > minArea) {
                                 let peri = cv.arcLength(cnt, true);
                                 let approx = new cv.Mat();
-                                cv.approxPolyDP(cnt, approx, 0.02 * peri, true); // Stricter epsilon for better corners
+                                cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
 
-                                // Removed isContourConvex check to handle curled paper
                                 if (area > maxArea && approx.rows === 4) {
                                     maxArea = area;
                                     if (maxContour) maxContour.delete();
-                                    maxContour = approx;
+                                    maxContour = approx; // Keep the approx
+                                    foundQuad = true;
                                 } else {
                                     approx.delete();
+                                }
+                            }
+                        }
+
+                        // FALLBACK: If no quad, just find the largest blob and extract corners
+                        if (!foundQuad) {
+                            for (let i = 0; i < contours.size(); ++i) {
+                                let cnt = contours.get(i);
+                                let area = cv.contourArea(cnt);
+                                if (area > maxArea && area > minArea) {
+                                    maxArea = area;
+                                    if (maxContour) maxContour.delete();
+                                    maxContour = cnt.clone(); // Use raw contour
                                 }
                             }
                         }
@@ -139,21 +153,34 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                 overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
                                 const pts = [];
-                                for (let i = 0; i < 4; i++) {
-                                    pts.push({
-                                        x: maxContour.data32S[i * 2] / workWidth,
-                                        y: maxContour.data32S[i * 2 + 1] / workHeight
-                                    });
+                                // Extract 4 corners from ANY contour using sum/diff
+                                const data = maxContour.data32S;
+                                const numPoints = maxContour.rows;
+
+                                let minSum = Infinity, maxSum = -Infinity;
+                                let minDiff = Infinity, maxDiff = -Infinity;
+                                let tlIdx = 0, trIdx = 0, brIdx = 0, blIdx = 0;
+
+                                for (let j = 0; j < numPoints; j++) {
+                                    const x = data[j * 2];
+                                    const y = data[j * 2 + 1];
+                                    const sum = x + y;
+                                    const diff = y - x;
+
+                                    if (sum < minSum) { minSum = sum; tlIdx = j; }
+                                    if (sum > maxSum) { maxSum = sum; brIdx = j; }
+                                    if (diff < minDiff) { minDiff = diff; trIdx = j; }
+                                    if (diff > maxDiff) { maxDiff = diff; blIdx = j; }
                                 }
 
-                                let sums = pts.map(p => p.x + p.y);
-                                let diffs = pts.map(p => p.y - p.x);
-                                const tl = pts[sums.indexOf(Math.min(...sums))];
-                                const br = pts[sums.indexOf(Math.max(...sums))];
-                                const tr = pts[diffs.indexOf(Math.min(...diffs))];
-                                const bl = pts[diffs.indexOf(Math.max(...diffs))];
+                                // Push normalized points directly in order: TL, TR, BR, BL
+                                // (Note: The extraction logic above already identifies them correctly)
+                                const detectedPts = [tlIdx, trIdx, brIdx, blIdx].map(idx => ({
+                                    x: data[idx * 2] / workWidth,
+                                    y: data[idx * 2 + 1] / workHeight
+                                }));
 
-                                detectedQuadRef.current = [tl, tr, br, bl];
+                                detectedQuadRef.current = detectedPts;
                                 setIsDocumentDetected(true);
                                 setScanStatus("DOKUMEN TERDETEKSI! [Stabil]");
 
