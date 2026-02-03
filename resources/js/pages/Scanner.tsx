@@ -64,28 +64,43 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
         img.onload = () => {
             const src = cv.imread(img);
 
-            // 1. Detection Phase
-            let dst = new cv.Mat();
-            cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY, 0);
-            cv.GaussianBlur(dst, dst, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-            cv.Canny(dst, dst, 75, 200);
+            // 1. Detection Phase (Higher Robustness)
+            let gray = new cv.Mat();
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+
+            // Bilateral Filter for noise reduction while keeping edges
+            let filtered = new cv.Mat();
+            cv.bilateralFilter(gray, filtered, 9, 75, 75, cv.BORDER_DEFAULT);
+
+            // Thresholding to find the document against background
+            let thresh = new cv.Mat();
+            cv.adaptiveThreshold(filtered, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 115, 4);
+
+            // Dilate to close any small gaps in borders
+            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+            let dilated = new cv.Mat();
+            cv.dilate(thresh, dilated, kernel);
 
             let contours = new cv.MatVector();
             let hierarchy = new cv.Mat();
-            cv.findContours(dst, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
             let maxArea = 0;
             let maxContour = null;
 
+            // Sort and find biggest quad
             for (let i = 0; i < contours.size(); ++i) {
-                let contour = contours.get(i);
-                let area = cv.contourArea(contour);
-                if (area > maxArea) {
-                    let peri = cv.arcLength(contour, true);
+                let cnt = contours.get(i);
+                let area = cv.contourArea(cnt);
+                if (area > 10000) { // Minimum size threshold
+                    let peri = cv.arcLength(cnt, true);
                     let approx = new cv.Mat();
-                    cv.approxPolyDP(contour, approx, 0.02 * peri, true);
-                    if (approx.rows === 4) {
+                    cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+
+                    // If it has 4 points and is larger than previous max
+                    if (approx.rows === 4 && area > maxArea) {
                         maxArea = area;
+                        if (maxContour) maxContour.delete();
                         maxContour = approx;
                     } else {
                         approx.delete();
@@ -95,19 +110,22 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
 
             // 2. Warping/Cropping Phase
             let finalImage;
-            if (maxContour && maxArea > 5000) { // Increased threshold to avoid noise
+            if (maxContour) {
                 // Prepare points for transform
                 let pts = [];
                 for (let i = 0; i < 4; i++) {
                     pts.push({ x: maxContour.data32S[i * 2], y: maxContour.data32S[i * 2 + 1] });
                 }
 
-                // IMPROVED POINT SORTING (Top-Left, Top-Right, Bottom-Right, Bottom-Left)
-                // 1. Sort by Y-coordinate
-                pts.sort((a, b) => a.y - b.y);
-                let top = pts.slice(0, 2).sort((a, b) => a.x - b.x);
-                let bottom = pts.slice(2, 4).sort((a, b) => a.x - b.x);
-                let sortedPts = [top[0], top[1], bottom[1], bottom[0]];
+                // Sorting points accurately for perspective transform
+                let sortedPts = new Array(4);
+                let sums = pts.map(p => p.x + p.y);
+                let diffs = pts.map(p => p.y - p.x);
+
+                sortedPts[0] = pts[sums.indexOf(Math.min(...sums))]; // Top-Left
+                sortedPts[2] = pts[sums.indexOf(Math.max(...sums))]; // Bottom-Right
+                sortedPts[1] = pts[diffs.indexOf(Math.min(...diffs))]; // Top-Right
+                sortedPts[3] = pts[diffs.indexOf(Math.max(...diffs))]; // Bottom-Left
 
                 // Calculate real aspect ratio for the output image
                 const w1 = Math.hypot(sortedPts[1].x - sortedPts[0].x, sortedPts[1].y - sortedPts[0].y);
@@ -118,8 +136,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                 const maxWidth = Math.max(w1, w2);
                 const maxHeight = Math.max(h1, h2);
 
-                // Ensure we don't blow up memory but keep high resolution
-                const scale = Math.min(2000 / Math.max(maxWidth, maxHeight), 1.0);
+                const scale = Math.min(1600 / Math.max(maxWidth, maxHeight), 1.0);
                 const outW = Math.round(maxWidth * scale);
                 const outH = Math.round(maxHeight * scale);
 
@@ -147,7 +164,9 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
             setCroppedImage(canvas.toDataURL('image/jpeg', 0.95)); // Very high quality
             setStage('details');
 
-            src.delete(); dst.delete(); contours.delete(); hierarchy.delete();
+            // Cleanup
+            src.delete(); gray.delete(); filtered.delete(); thresh.delete();
+            kernel.delete(); dilated.delete(); contours.delete(); hierarchy.delete();
             if (maxContour) maxContour.delete();
             finalImage.delete();
         };
