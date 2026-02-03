@@ -128,15 +128,26 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         src = cv.imread(processCanvas);
                         gray = new cv.Mat();
                         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-                        // Use lighter blur
+                        // Blur to reduce noise
                         cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
                         edges = new cv.Mat();
-                        // Lower Canny thresholds for better sensitivity
-                        cv.Canny(gray, edges, 30, 150);
+                        // Use Adaptive Threshold -> Canny for robust paper detection
+                        // 1. Threshold to get binary mask (paper vs background)
+                        cv.adaptiveThreshold(gray, edges, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
 
+                        // 2. Clean up the mask (remove noise)
                         let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-                        cv.dilate(edges, edges, kernel, new cv.Point(-1, -1), 2);
+                        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel); // Fill holes
+
+                        // 3. Detect edges on the clean binary mask
+                        let tempEdges = new cv.Mat();
+                        cv.Canny(edges, tempEdges, 50, 150);
+                        edges.delete(); // Free the threshold result
+                        edges = tempEdges; // Use the canny output for findContours
+
+                        // Slight dilation to connect broken lines
+                        cv.dilate(edges, edges, kernel);
                         kernel.delete();
 
                         contours = new cv.MatVector();
@@ -244,7 +255,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         } else {
                             detectedQuadRef.current = null;
                             setIsDocumentDetected(false);
-                            setScanStatus("Mencari Dokumen... (" + Date.now().toString().slice(-4) + ")");
+                            setScanStatus("Mode: Adaptive Threshold... (" + Date.now().toString().slice(-4) + ")");
                             if (overlay) {
                                 const overlayCtx = overlay.getContext('2d');
                                 overlayCtx?.clearRect(0, 0, overlay.width, overlay.height);
@@ -577,8 +588,8 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                         <button
                                             onClick={toggleTorch}
                                             className={`p-3 rounded-full backdrop-blur-md border transition-all ${torchOn
-                                                    ? 'bg-amber-400/20 border-amber-400/50 text-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.3)]'
-                                                    : 'bg-black/40 border-white/10 text-white hover:bg-black/60'
+                                                ? 'bg-amber-400/20 border-amber-400/50 text-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.3)]'
+                                                : 'bg-black/40 border-white/10 text-white hover:bg-black/60'
                                                 }`}
                                         >
                                             {torchOn ? <ZapOff className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
