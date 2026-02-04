@@ -2,7 +2,7 @@ import { Head, usePage, useForm, Link, router } from '@inertiajs/react';
 import AppLayout from '@/layouts/app-layout';
 import { dashboard } from '@/routes';
 import type { BreadcrumbItem, SharedData, Category, Archive } from '@/types';
-import { Cloud, FileText, Folder, MoreVertical, Plus, Scan, Upload, Loader2, Search, Filter, X, Eye, Edit2, Trash2 } from 'lucide-react';
+import { FileText, Folder, MoreVertical, Plus, Upload, Loader2, Search, Filter, X, Eye, Edit2, Trash2 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import {
     Dialog,
@@ -241,29 +241,7 @@ export default function Dashboard({
                         <FileText className="absolute right-8 top-1/2 -translate-y-1/2 h-40 w-40 text-indigo-200/40 rotate-12 transition-transform group-hover:rotate-6 duration-500" />
                     </Link>
 
-                    {/* Receive / Scan Card */}
-                    <Link
-                        href="/scanner"
-                        className="relative overflow-hidden rounded-[2rem] bg-slate-900 p-8 flex flex-col justify-between h-56 md:h-64 group cursor-pointer transition-all hover:shadow-xl hover:-translate-y-1"
-                    >
-                        <div className="flex items-start justify-between z-10">
-                            <div className="h-12 w-12 rounded-full bg-slate-800 text-white flex items-center justify-center border border-slate-700">
-                                <span className="font-bold text-sm">GO</span>
-                            </div>
-                            <Scan className="h-8 w-8 text-white/80" />
-                        </div>
 
-                        <div className="z-10 mt-auto">
-                            <h3 className="text-3xl font-bold text-white mb-1">Scan</h3>
-                            <div className="inline-flex items-center rounded-full bg-slate-800 px-4 py-1.5 text-sm font-medium text-slate-300 border border-slate-700">
-                                Mulai Scan Dokumen
-                            </div>
-                        </div>
-
-                        {/* Decor */}
-                        <div className="absolute right-[-5%] bottom-[-10%] w-56 h-56 bg-blue-500/20 blur-3xl rounded-full" />
-                        <Cloud className="absolute right-6 top-10 h-44 w-44 text-white/5 rotate-[-12deg] transition-transform group-hover:rotate-0 duration-500" />
-                    </Link>
                 </div>
 
                 {/* Search & Filter Section */}
@@ -710,7 +688,7 @@ export default function Dashboard({
             {/* Floating Action Button (FAB) */}
             <div className="fixed bottom-6 right-6 md:bottom-10 md:right-10 z-50">
                 <Link
-                    href="/scanner"
+                    href="/upload"
                     className="h-14 w-14 rounded-[1.2rem] bg-blue-400 hover:bg-blue-500 text-white shadow-xl shadow-blue-400/40 flex items-center justify-center transition-transform hover:scale-105 active:scale-95"
                 >
                     <Plus className="h-7 w-7" />
