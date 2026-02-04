@@ -90,10 +90,9 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
             const track = webcamRef.current.stream.getVideoTracks()[0];
             const newMode = !torchOn;
 
-            // @ts-ignore
             track.applyConstraints({
                 advanced: [{ torch: newMode }]
-            }).then(() => {
+            } as any).then(() => {
                 setTorchOn(newMode);
             }).catch(e => console.error(e));
         }
@@ -139,6 +138,9 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
         e.currentTarget.releasePointerCapture(e.pointerId);
     };
 
+    // Smoothing History
+    const prevQuadsRef = useRef<Array<{ x: number, y: number }[]>>([]);
+
     // Real-time Detection Loop (Interval Based)
     useEffect(() => {
         if (!cvReady || stage !== 'camera') return;
@@ -155,7 +157,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                 // setScanStatus(s => s.startsWith('Scanning') ? s : 'Scanning...'); 
 
                 const processCanvas = document.createElement('canvas');
-                const workWidth = 400; // Slightly higher res for better detection
+                const workWidth = 500; // Increased Work Res
                 const scale = workWidth / video.videoWidth;
                 const workHeight = video.videoHeight * scale;
 
@@ -171,28 +173,30 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                     try {
                         src = cv.imread(processCanvas);
                         gray = new cv.Mat();
+                        // Pre-process: enhance contrast?
                         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-                        // Blur to reduce noise
-                        cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
+
+                        // Strong blur to remove texture variations (carpet/floor patterns)
+                        cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT);
 
                         edges = new cv.Mat();
-                        // Use Adaptive Threshold -> Canny for robust paper detection
-                        // 1. Threshold to get binary mask (paper vs background)
-                        cv.adaptiveThreshold(gray, edges, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 11, 2);
 
-                        // 2. Clean up the mask (remove noise)
-                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-                        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel); // Fill holes
+                        // Tweak: Larger Block Size (21) for Adaptive Threshold helps with shadows/lighting gradients
+                        cv.adaptiveThreshold(gray, edges, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 2);
 
-                        // 3. Detect edges on the clean binary mask
-                        let tempEdges = new cv.Mat();
-                        cv.Canny(edges, tempEdges, 50, 150);
-                        edges.delete(); // Free the threshold result
-                        edges = tempEdges; // Use the canny output for findContours
+                        // Morphological Closing to fill letters/gaps
+                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+                        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
 
-                        // Slight dilation to connect broken lines
+                        // Dilate to connect edges
                         cv.dilate(edges, edges, kernel);
                         kernel.delete();
+
+                        // Canny (Edge Detection) - Lower thresholds to catch faint edges
+                        let tempEdges = new cv.Mat();
+                        cv.Canny(edges, tempEdges, 30, 100);
+                        edges.delete();
+                        edges = tempEdges;
 
                         contours = new cv.MatVector();
                         hierarchy = new cv.Mat();
@@ -200,7 +204,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
 
                         let maxArea = 0;
                         let maxContourIdx = -1;
-                        const minArea = (workWidth * workHeight) * 0.15;
+                        const minArea = (workWidth * workHeight) * 0.10; // Lowered to 10%
 
                         for (let i = 0; i < contours.size(); ++i) {
                             let cnt = contours.get(i);
@@ -213,29 +217,32 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
 
                         let activeQuad = null;
 
+                        // Manual Mode
                         if (manualCorners) {
-                            // Manual override
                             activeQuad = manualCorners;
                             detectedQuadRef.current = manualCorners;
+                            // Reset smoothing history on manual override
+                            prevQuadsRef.current = [];
                             setIsDocumentDetected(true);
                             setScanStatus("Mode Manual: Geser Sudut");
                         } else if (maxContourIdx !== -1) {
-                            // Auto detection
                             maxContour = contours.get(maxContourIdx);
                             let peri = cv.arcLength(maxContour, true);
                             let approx = new cv.Mat();
                             cv.approxPolyDP(maxContour, approx, 0.02 * peri, true);
 
+                            // Extract Corners
+                            let rawQuad = null;
                             if (approx.rows === 4) {
                                 const data = approx.data32S;
-                                activeQuad = [
+                                rawQuad = [
                                     { x: data[0] / workWidth, y: data[1] / workHeight },
                                     { x: data[2] / workWidth, y: data[3] / workHeight },
                                     { x: data[4] / workWidth, y: data[5] / workHeight },
                                     { x: data[6] / workWidth, y: data[7] / workHeight },
                                 ];
                             } else {
-                                // Fallback to extreme points
+                                // Extreme Points Fallback
                                 const data = maxContour.data32S;
                                 const numPoints = maxContour.rows;
                                 let tlIdx = 0, trIdx = 0, brIdx = 0, blIdx = 0;
@@ -251,20 +258,41 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                     if (diff < minDiff) { minDiff = diff; trIdx = j; }
                                     if (diff > maxDiff) { maxDiff = diff; blIdx = j; }
                                 }
-
-                                activeQuad = [tlIdx, trIdx, brIdx, blIdx].map(idx => ({
+                                rawQuad = [tlIdx, trIdx, brIdx, blIdx].map(idx => ({
                                     x: data[idx * 2] / workWidth,
                                     y: data[idx * 2 + 1] / workHeight
                                 }));
                             }
-
                             approx.delete();
-                            detectedQuadRef.current = activeQuad;
-                            setIsDocumentDetected(true);
-                            setScanStatus("DOKUMEN TERDETEKSI!");
+
+                            // TEMPORAL SMOOTHING
+                            if (rawQuad) {
+                                // Sort points to ensure consistent order (TL, TR, BR, BL)
+                                // Only simple sort based on sum/diff might jump if rotation, but keeping it simple for now
+                                // (Already implicitly sorted by extreme point logic, approx might vary)
+
+                                const history = prevQuadsRef.current;
+                                history.push(rawQuad);
+                                if (history.length > 5) history.shift(); // Keep last 5 frames
+
+                                // Average points
+                                activeQuad = [0, 1, 2, 3].map(idx => {
+                                    let sumX = 0, sumY = 0;
+                                    history.forEach(q => {
+                                        sumX += q[idx].x;
+                                        sumY += q[idx].y;
+                                    });
+                                    return { x: sumX / history.length, y: sumY / history.length };
+                                });
+
+                                detectedQuadRef.current = activeQuad;
+                                setIsDocumentDetected(true);
+                                setScanStatus("DOKUMEN TERDETEKSI!");
+                            }
                         } else {
                             // No document found
                             detectedQuadRef.current = null;
+                            prevQuadsRef.current = []; // Reset history
                             setIsDocumentDetected(false);
                             setScanStatus("Mencari Dokumen...");
                         }
@@ -612,13 +640,12 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                     {/* CAMERA STAGE */}
                     {stage === 'camera' && (
                         <div className="w-full flex flex-col items-center gap-8">
-                            <div className="relative w-full aspect-[3/4] max-w-[400px] bg-black rounded-[3rem] overflow-hidden shadow-2xl border-8 border-slate-900 mx-auto group">
+                            {/* Container adjusted to fit video naturally */}
+                            <div className="relative w-full max-w-[480px] bg-black rounded-[2rem] overflow-hidden shadow-2xl border-4 border-slate-900 mx-auto group">
                                 <Webcam
                                     ref={webcamRef}
-                                    screenshotFormat="image/jpeg"
-                                    screenshotQuality={1}
-                                    className="w-full h-full object-cover"
-                                    videoConstraints={{ facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }}
+                                    className="w-full h-auto block"
+                                    videoConstraints={{ facingMode: 'environment', width: { ideal: 3840 }, height: { ideal: 2160 } }}
                                 />
                                 {/* Real-time Detection Overlay */}
                                 <canvas
