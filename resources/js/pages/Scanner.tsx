@@ -153,11 +153,8 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                 const video = webcamRef.current.video;
                 const cv = window.cv;
 
-                // Debug: Update status timestamp to show it's alive
-                // setScanStatus(s => s.startsWith('Scanning') ? s : 'Scanning...'); 
-
                 const processCanvas = document.createElement('canvas');
-                const workWidth = 500; // Increased Work Res
+                const workWidth = 500;
                 const scale = workWidth / video.videoWidth;
                 const workHeight = video.videoHeight * scale;
 
@@ -168,131 +165,93 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                 if (ctx) {
                     ctx.drawImage(video, 0, 0, workWidth, workHeight);
 
-                    let src, gray, edges, contours, hierarchy, maxContour;
+                    let src = null, gray = null, blurred = null, edges = null, dilated = null;
+                    let contours = null, hierarchy = null, approx = null, maxContour = null;
 
                     try {
                         src = cv.imread(processCanvas);
                         gray = new cv.Mat();
-                        // Pre-process: enhance contrast?
                         cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
 
-                        // Strong blur to remove texture variations (carpet/floor patterns)
-                        cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT);
+                        // 1. Preprocessing: GaussianBlur (5x5)
+                        blurred = new cv.Mat();
+                        cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
+                        // 2. Edge Detection: Canny
                         edges = new cv.Mat();
+                        cv.Canny(blurred, edges, 75, 200);
 
-                        // Tweak: Larger Block Size (21) for Adaptive Threshold helps with shadows/lighting gradients
-                        cv.adaptiveThreshold(gray, edges, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 2);
-
-                        // Morphological Closing to fill letters/gaps
-                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-                        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
-
-                        // Dilate to connect edges
-                        cv.dilate(edges, edges, kernel);
+                        // 3. Morphology: Dilate
+                        dilated = new cv.Mat();
+                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+                        cv.dilate(edges, dilated, kernel, new cv.Point(-1, -1), 2); // 2 iterations
                         kernel.delete();
 
-                        // Canny (Edge Detection) - Lower thresholds to catch faint edges
-                        let tempEdges = new cv.Mat();
-                        cv.Canny(edges, tempEdges, 30, 100);
-                        edges.delete();
-                        edges = tempEdges;
-
+                        // 4. Contour Finding
                         contours = new cv.MatVector();
                         hierarchy = new cv.Mat();
-                        cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                        cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                         let maxArea = 0;
-                        let maxContourIdx = -1;
-                        const minArea = (workWidth * workHeight) * 0.10; // Lowered to 10%
+                        let foundQuad = null;
+                        const minArea = (workWidth * workHeight) * 0.15;
 
                         for (let i = 0; i < contours.size(); ++i) {
                             let cnt = contours.get(i);
                             let area = cv.contourArea(cnt);
-                            if (area > minArea && area > maxArea) {
-                                maxArea = area;
-                                maxContourIdx = i;
+
+                            if (area > minArea) {
+                                let peri = cv.arcLength(cnt, true);
+                                approx = new cv.Mat();
+                                cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+
+                                if (area > maxArea && approx.rows === 4 && cv.isContourConvex(approx)) {
+                                    maxArea = area;
+                                    if (foundQuad) foundQuad.delete();
+                                    foundQuad = approx; // Keep reference to valid quad
+                                    approx = null; // Prevent deletion of this specific mat in loop cleanup
+                                } else {
+                                    approx.delete();
+                                }
                             }
                         }
 
+                        // 6. Point Sorting
                         let activeQuad = null;
 
-                        // Manual Mode
                         if (manualCorners) {
                             activeQuad = manualCorners;
                             detectedQuadRef.current = manualCorners;
-                            // Reset smoothing history on manual override
-                            prevQuadsRef.current = [];
                             setIsDocumentDetected(true);
                             setScanStatus("Mode Manual: Geser Sudut");
-                        } else if (maxContourIdx !== -1) {
-                            maxContour = contours.get(maxContourIdx);
-                            let peri = cv.arcLength(maxContour, true);
-                            let approx = new cv.Mat();
-                            cv.approxPolyDP(maxContour, approx, 0.02 * peri, true);
+                        } else if (foundQuad) {
+                            const data = foundQuad.data32S;
+                            const pts = [
+                                { x: data[0], y: data[1] },
+                                { x: data[2], y: data[3] },
+                                { x: data[4], y: data[5] },
+                                { x: data[6], y: data[7] }
+                            ];
 
-                            // Extract Corners
-                            let rawQuad = null;
-                            if (approx.rows === 4) {
-                                const data = approx.data32S;
-                                rawQuad = [
-                                    { x: data[0] / workWidth, y: data[1] / workHeight },
-                                    { x: data[2] / workWidth, y: data[3] / workHeight },
-                                    { x: data[4] / workWidth, y: data[5] / workHeight },
-                                    { x: data[6] / workWidth, y: data[7] / workHeight },
-                                ];
-                            } else {
-                                // Extreme Points Fallback
-                                const data = maxContour.data32S;
-                                const numPoints = maxContour.rows;
-                                let tlIdx = 0, trIdx = 0, brIdx = 0, blIdx = 0;
-                                let minSum = Infinity, maxSum = -Infinity, minDiff = Infinity, maxDiff = -Infinity;
+                            // Sort by Y to separate Top/Bottom
+                            pts.sort((a, b) => a.y - b.y);
+                            const top = pts.slice(0, 2).sort((a, b) => a.x - b.x); // TL, TR
+                            const bottom = pts.slice(2, 4).sort((a, b) => a.x - b.x); // BL, BR
 
-                                for (let j = 0; j < numPoints; j++) {
-                                    const x = data[j * 2];
-                                    const y = data[j * 2 + 1];
-                                    const sum = x + y;
-                                    const diff = y - x;
-                                    if (sum < minSum) { minSum = sum; tlIdx = j; }
-                                    if (sum > maxSum) { maxSum = sum; brIdx = j; }
-                                    if (diff < minDiff) { minDiff = diff; trIdx = j; }
-                                    if (diff > maxDiff) { maxDiff = diff; blIdx = j; }
-                                }
-                                rawQuad = [tlIdx, trIdx, brIdx, blIdx].map(idx => ({
-                                    x: data[idx * 2] / workWidth,
-                                    y: data[idx * 2 + 1] / workHeight
-                                }));
-                            }
-                            approx.delete();
+                            // Output: TL, TR, BR, BL
+                            // Order: top-left, top-right, bottom-right, bottom-left
+                            const sortedPts = [top[0], top[1], bottom[1], bottom[0]];
 
-                            // TEMPORAL SMOOTHING
-                            if (rawQuad) {
-                                // Sort points to ensure consistent order (TL, TR, BR, BL)
-                                // Only simple sort based on sum/diff might jump if rotation, but keeping it simple for now
-                                // (Already implicitly sorted by extreme point logic, approx might vary)
+                            activeQuad = sortedPts.map(p => ({
+                                x: p.x / workWidth,
+                                y: p.y / workHeight
+                            }));
 
-                                const history = prevQuadsRef.current;
-                                history.push(rawQuad);
-                                if (history.length > 5) history.shift(); // Keep last 5 frames
-
-                                // Average points
-                                activeQuad = [0, 1, 2, 3].map(idx => {
-                                    let sumX = 0, sumY = 0;
-                                    history.forEach(q => {
-                                        sumX += q[idx].x;
-                                        sumY += q[idx].y;
-                                    });
-                                    return { x: sumX / history.length, y: sumY / history.length };
-                                });
-
-                                detectedQuadRef.current = activeQuad;
-                                setIsDocumentDetected(true);
-                                setScanStatus("DOKUMEN TERDETEKSI!");
-                            }
+                            detectedQuadRef.current = activeQuad;
+                            setIsDocumentDetected(true);
+                            setScanStatus("DOKUMEN TERDETEKSI!");
                         } else {
-                            // No document found
                             detectedQuadRef.current = null;
-                            prevQuadsRef.current = []; // Reset history
                             setIsDocumentDetected(false);
                             setScanStatus("Mencari Dokumen...");
                         }
@@ -303,70 +262,59 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                             overlay.width = video.clientWidth;
                             overlay.height = video.clientHeight;
                             const overlayCtx = overlay.getContext('2d');
-
                             if (overlayCtx) {
                                 overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-
                                 if (activeQuad) {
                                     const drawPts = activeQuad.map(p => ({
                                         x: p.x * overlay.width,
                                         y: p.y * overlay.height
                                     }));
-
                                     overlayCtx.beginPath();
                                     overlayCtx.lineWidth = 4;
                                     overlayCtx.strokeStyle = manualCorners ? '#fbbf24' : '#10b981';
                                     overlayCtx.lineCap = 'round';
                                     overlayCtx.lineJoin = 'round';
-
                                     overlayCtx.moveTo(drawPts[0].x, drawPts[0].y);
                                     overlayCtx.lineTo(drawPts[1].x, drawPts[1].y);
                                     overlayCtx.lineTo(drawPts[2].x, drawPts[2].y);
                                     overlayCtx.lineTo(drawPts[3].x, drawPts[3].y);
                                     overlayCtx.closePath();
                                     overlayCtx.stroke();
-                                    overlayCtx.fillStyle = manualCorners ? 'rgba(251, 191, 36, 0.2)' : 'rgba(16, 185, 129, 0.2)';
-                                    overlayCtx.fill();
 
                                     // Handles
                                     activeQuad.forEach(p => {
                                         const cx = p.x * overlay.width;
                                         const cy = p.y * overlay.height;
                                         overlayCtx.beginPath();
-                                        overlayCtx.arc(cx, cy, 10, 0, 2 * Math.PI);
-                                        overlayCtx.fillStyle = 'white';
+                                        overlayCtx.arc(cx, cy, 6, 0, 2 * Math.PI);
+                                        overlayCtx.fillStyle = '#fff';
                                         overlayCtx.fill();
-                                        overlayCtx.lineWidth = 2;
-                                        overlayCtx.strokeStyle = manualCorners ? '#fbbf24' : '#10b981';
                                         overlayCtx.stroke();
                                     });
                                 }
                             }
                         }
 
-                        // Cleanup
-                        if (src) src.delete();
-                        if (gray) gray.delete();
-                        if (edges) edges.delete();
-                        if (contours) contours.delete();
-                        if (hierarchy) hierarchy.delete();
-                        if (maxContour) maxContour.delete();
-
+                        // Cleanup (Explicit)
+                        if (foundQuad) foundQuad.delete(); // Delete the found Approx Mat
                     } catch (e) {
                         console.error("CV Error", e);
-                        try {
-                            if (src && !src.isDeleted()) src.delete();
-                            if (gray && !gray.isDeleted()) gray.delete();
-                            if (edges && !edges.isDeleted()) edges.delete();
-                        } catch (err) { }
                     } finally {
+                        if (src) src.delete();
+                        if (gray) gray.delete();
+                        if (blurred) blurred.delete();
+                        if (edges) edges.delete();
+                        if (dilated) dilated.delete();
+                        if (contours) contours.delete();
+                        if (hierarchy) hierarchy.delete();
+                        if (approx) approx.delete(); // In case it wasn't null
                         isProcessingRef.current = false;
                     }
                 } else {
                     isProcessingRef.current = false;
                 }
             }
-        }, 200); // Check every 200ms instead of every frame
+        }, 150); // Lowered interval slightly
 
         return () => clearInterval(interval);
     }, [stage, cvReady]);
@@ -378,13 +326,36 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
         if (image) {
             setImageSrc(image);
 
-            if (detectedQuadRef.current && cvReady) {
-                const cv = window.cv;
-                const img = new Image();
-                img.onload = () => {
-                    const src = cv.imread(img);
+            // Initialize manual corners with detected quad if available, else full screen
+            if (detectedQuadRef.current) {
+                setManualCorners(detectedQuadRef.current);
+            } else {
+                setManualCorners([
+                    { x: 0.1, y: 0.1 },
+                    { x: 0.9, y: 0.1 },
+                    { x: 0.9, y: 0.9 },
+                    { x: 0.1, y: 0.9 }
+                ]);
+            }
+            setStage('crop'); // Go to crop stage for confirmation
+        }
+    }, [webcamRef]);
 
-                    const pts = detectedQuadRef.current!.map(p => ({
+    const confirmCrop = () => {
+        if (!imageSrc || !cvReady) return;
+        const cv = window.cv;
+        const img = new Image();
+        img.onload = () => {
+            let src = null, finalImage = null, srcTri = null, dstTri = null, M = null;
+            try {
+                src = cv.imread(img);
+
+                // Use valid points or default to full image
+                let corners = manualCorners || detectedQuadRef.current;
+
+                if (corners) {
+                    // Map normalized points to actual image dimensions
+                    const pts = corners.map(p => ({
                         x: p.x * src.cols,
                         y: p.y * src.rows
                     }));
@@ -397,160 +368,38 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                     const outW = Math.max(w1, w2);
                     const outH = Math.max(h1, h2);
 
-                    let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                    // Source Points (TL, TR, BR, BL) - corners are already sorted by detection/UI
+                    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
                         pts[0].x, pts[0].y,
                         pts[1].x, pts[1].y,
                         pts[2].x, pts[2].y,
                         pts[3].x, pts[3].y
                     ]);
 
-                    let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
-                    let M = cv.getPerspectiveTransform(srcTri, dstTri);
+                    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
+                    M = cv.getPerspectiveTransform(srcTri, dstTri);
 
-                    let finalImage = new cv.Mat();
+                    finalImage = new cv.Mat();
                     cv.warpPerspective(src, finalImage, M, new cv.Size(outW, outH));
-
-                    const canvas = document.createElement('canvas');
-                    cv.imshow(canvas, finalImage);
-
-                    setCurrentCropped(canvas.toDataURL('image/jpeg', 0.95));
-                    setStage('review_page');
-
-                    src.delete(); srcTri.delete(); dstTri.delete(); M.delete(); finalImage.delete();
-                };
-                img.src = image;
-            } else {
-                setStage('crop');
-            }
-        }
-    }, [webcamRef, cvReady]);
-
-    const confirmCrop = () => {
-        if (!imageSrc || !cvReady) return;
-        const cv = window.cv;
-        const img = new Image();
-        img.onload = () => {
-            const src = cv.imread(img);
-
-            // 1. DOWNSCALE (Performance & Noise Reduction)
-            let detectionSrc = new cv.Mat();
-            const scaleFactor = 800 / src.cols;
-            const dSize = new cv.Size(src.cols * scaleFactor, src.rows * scaleFactor);
-            cv.resize(src, detectionSrc, dSize, 0, 0, cv.INTER_AREA);
-
-            // 2. PROCESSING
-            let gray = new cv.Mat();
-            cv.cvtColor(detectionSrc, gray, cv.COLOR_RGBA2GRAY, 0);
-
-            // Use GaussianBlur to reduce noise
-            cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-
-            // Canny Edges - Lower thresholds to catch faint edges
-            let edges = new cv.Mat();
-            cv.Canny(gray, edges, 50, 150); // Lowered from 75,200
-
-            // Dilate strongly to close gaps in paper edges
-            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            cv.dilate(edges, edges, kernel); // 1 iteration usually enough with 5x5
-
-            // 3. FIND CONTOURS
-            let contours = new cv.MatVector();
-            let hierarchy = new cv.Mat();
-            cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-            let maxArea = 0;
-            let maxContour = null;
-            const minArea = (detectionSrc.cols * detectionSrc.rows) * 0.05;
-
-            for (let i = 0; i < contours.size(); ++i) {
-                let cnt = contours.get(i);
-                let area = cv.contourArea(cnt);
-
-                if (area > minArea) {
-                    let peri = cv.arcLength(cnt, true);
-                    let approx = new cv.Mat();
-                    // Relax epsilon slightly to 0.03 to tolerate slightly curved pages
-                    cv.approxPolyDP(cnt, approx, 0.03 * peri, true);
-
-                    if (area > maxArea) {
-                        // Prefer 4 corners, but if not, we can potentially use bounding rect
-                        // For now, prioritize quads
-                        if (approx.rows === 4 && cv.isContourConvex(approx)) {
-                            maxArea = area;
-                            if (maxContour) maxContour.delete();
-                            maxContour = approx;
-                        } else {
-                            // Backup: keep looking, but don't discard if we don't find a quad immediately
-                            approx.delete();
-                        }
-                    } else {
-                        approx.delete();
-                    }
-                }
-            }
-
-            // 4. WARP
-            let finalImage = new cv.Mat();
-
-            if (maxContour) {
-                let pts = [];
-                for (let i = 0; i < 4; i++) {
-                    pts.push({ x: maxContour.data32S[i * 2], y: maxContour.data32S[i * 2 + 1] });
+                } else {
+                    // Fallback: Copy full image (should rarely happen given default in capture)
+                    finalImage = src.clone();
                 }
 
-                // Sort: TL, TR, BR, BL
-                let sortedPts = new Array(4);
-                let sums = pts.map(p => p.x + p.y);
-                let diffs = pts.map(p => p.y - p.x);
+                const canvas = document.createElement('canvas');
+                cv.imshow(canvas, finalImage);
+                setCurrentCropped(canvas.toDataURL('image/jpeg', 0.90));
+                setStage('review_page');
 
-                sortedPts[0] = pts[sums.indexOf(Math.min(...sums))]; // TL
-                sortedPts[2] = pts[sums.indexOf(Math.max(...sums))]; // BR
-                sortedPts[1] = pts[diffs.indexOf(Math.min(...diffs))]; // TR
-                sortedPts[3] = pts[diffs.indexOf(Math.max(...diffs))]; // BL
-
-                // Scale up
-                const realPts = sortedPts.map(p => ({
-                    x: p.x / scaleFactor,
-                    y: p.y / scaleFactor
-                }));
-
-                const w1 = Math.hypot(realPts[1].x - realPts[0].x, realPts[1].y - realPts[0].y);
-                const w2 = Math.hypot(realPts[2].x - realPts[3].x, realPts[2].y - realPts[3].y);
-                const h1 = Math.hypot(realPts[3].x - realPts[0].x, realPts[3].y - realPts[0].y);
-                const h2 = Math.hypot(realPts[2].x - realPts[1].x, realPts[2].y - realPts[1].y);
-
-                const outW = Math.max(w1, w2);
-                const outH = Math.max(h1, h2);
-
-                let srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                    realPts[0].x, realPts[0].y,
-                    realPts[1].x, realPts[1].y,
-                    realPts[2].x, realPts[2].y,
-                    realPts[3].x, realPts[3].y
-                ]);
-
-                let dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
-                let M = cv.getPerspectiveTransform(srcTri, dstTri);
-
-                cv.warpPerspective(src, finalImage, M, new cv.Size(outW, outH));
-
-                srcTri.delete(); dstTri.delete(); M.delete();
-            } else {
-                // FALLBACK: If no quad found, use original image
-                // Optional: We could try to use bounding rect of largest contour if maxArea > 0
-                // For now, full image is safer fallback
-                src.copyTo(finalImage);
+            } catch (e) {
+                console.error("Crop Error", e);
+            } finally {
+                if (src) src.delete();
+                if (finalImage) finalImage.delete();
+                if (srcTri) srcTri.delete();
+                if (dstTri) dstTri.delete();
+                if (M) M.delete();
             }
-
-            const canvas = document.createElement('canvas');
-            cv.imshow(canvas, finalImage);
-            setCurrentCropped(canvas.toDataURL('image/jpeg', 0.95));
-            setStage('review_page');
-
-            src.delete(); detectionSrc.delete(); gray.delete(); edges.delete();
-            kernel.delete(); contours.delete(); hierarchy.delete();
-            if (maxContour) maxContour.delete();
-            finalImage.delete();
         };
         img.src = imageSrc;
     };
