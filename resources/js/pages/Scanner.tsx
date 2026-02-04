@@ -166,7 +166,8 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                     ctx.drawImage(video, 0, 0, workWidth, workHeight);
 
                     let src = null, gray = null, blurred = null, edges = null, dilated = null;
-                    let contours = null, hierarchy = null, approx = null, maxContour = null;
+                    let contours = null, hierarchy = null; // approx is now tmpApprox
+                    let maxContour = null;
 
                     try {
                         src = cv.imread(processCanvas);
@@ -177,11 +178,11 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         blurred = new cv.Mat();
                         cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
-                        // 2. Edge Detection: Canny
+                        // 2. Edge Detection: Canny with lower thresholds for sensitivity
                         edges = new cv.Mat();
-                        cv.Canny(blurred, edges, 75, 200);
+                        cv.Canny(blurred, edges, 30, 120);
 
-                        // 3. Morphology: Dilate
+                        // 3. Morphology: Dilate to close gaps
                         dilated = new cv.Mat();
                         let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
                         cv.dilate(edges, dilated, kernel, new cv.Point(-1, -1), 2); // 2 iterations
@@ -194,29 +195,29 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
 
                         let maxArea = 0;
                         let foundQuad = null;
-                        const minArea = (workWidth * workHeight) * 0.15;
+                        const minArea = (workWidth * workHeight) * 0.05; // 5% area threshold
 
                         for (let i = 0; i < contours.size(); ++i) {
-                            let cnt = contours.get(i);
+                            let cnt = contours.get(i); // Allocates memory
                             let area = cv.contourArea(cnt);
 
                             if (area > minArea) {
                                 let peri = cv.arcLength(cnt, true);
-                                approx = new cv.Mat();
-                                cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+                                let tmpApprox = new cv.Mat();
+                                cv.approxPolyDP(cnt, tmpApprox, 0.02 * peri, true);
 
-                                if (area > maxArea && approx.rows === 4 && cv.isContourConvex(approx)) {
+                                if (area > maxArea && tmpApprox.rows === 4 && cv.isContourConvex(tmpApprox)) {
                                     maxArea = area;
                                     if (foundQuad) foundQuad.delete();
-                                    foundQuad = approx; // Keep reference to valid quad
-                                    approx = null; // Prevent deletion of this specific mat in loop cleanup
+                                    foundQuad = tmpApprox; // Keep reference to valid quad
                                 } else {
-                                    approx.delete();
+                                    tmpApprox.delete();
                                 }
                             }
+                            cnt.delete(); // <--- CRITICAL: Delete contour immediately
                         }
 
-                        // 6. Point Sorting
+                        // 6. Point Sorting & Output
                         let activeQuad = null;
 
                         if (manualCorners) {
@@ -233,13 +234,17 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                 { x: data[6], y: data[7] }
                             ];
 
-                            // Sort by Y to separate Top/Bottom
+                            // Robust Sorting: TL, TR, BR, BL
+                            // 1. Sort by Y to get Top 2 and Bottom 2
                             pts.sort((a, b) => a.y - b.y);
-                            const top = pts.slice(0, 2).sort((a, b) => a.x - b.x); // TL, TR
-                            const bottom = pts.slice(2, 4).sort((a, b) => a.x - b.x); // BL, BR
 
-                            // Output: TL, TR, BR, BL
-                            // Order: top-left, top-right, bottom-right, bottom-left
+                            const top = pts.slice(0, 2).sort((a, b) => a.x - b.x); // Sort Top by X -> TL, TR
+                            const bottom = pts.slice(2, 4).sort((a, b) => a.x - b.x); // Sort Bottom by X -> BL, BR
+                            // Wait, strictly bottom right should be last?
+                            // Standard output: TL, TR, BR, BL.
+                            // My sort gives: TL, TR, BL, BR (if bottom sorted by X ascending)
+                            // So bottom[0] is BL, bottom[1] is BR.
+
                             const sortedPts = [top[0], top[1], bottom[1], bottom[0]];
 
                             activeQuad = sortedPts.map(p => ({
@@ -296,7 +301,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         }
 
                         // Cleanup (Explicit)
-                        if (foundQuad) foundQuad.delete(); // Delete the found Approx Mat
+                        if (foundQuad) foundQuad.delete();
                     } catch (e) {
                         console.error("CV Error", e);
                     } finally {
@@ -307,7 +312,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         if (dilated) dilated.delete();
                         if (contours) contours.delete();
                         if (hierarchy) hierarchy.delete();
-                        if (approx) approx.delete(); // In case it wasn't null
+                        // approx (tmpApprox) is handled in loop
                         isProcessingRef.current = false;
                     }
                 } else {
