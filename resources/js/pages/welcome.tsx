@@ -5,7 +5,7 @@ import { login, register } from '@/routes';
 export default function Welcome() {
     return (
         <>
-            <Head title="Selamat Datang di ArsipDesa" />
+            <Head title="Selamat Datang di Sistem Arsip Digital Desa" />
 
             <div className="flex min-h-screen items-center justify-center bg-gray-100 p-0 text-slate-900 dark:bg-slate-950 dark:text-white sm:p-6 font-sans">
 
@@ -59,7 +59,7 @@ export default function Welcome() {
                             <div className="h-8 w-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/30">
                                 <Archive className="h-4 w-4 text-white" />
                             </div>
-                            <span className="font-bold text-slate-900 dark:text-white tracking-tight text-lg">ArsipDesa</span>
+                            <span className="font-bold text-slate-900 dark:text-white tracking-tight text-lg">Sistem Arsip Digital Desa</span>
                         </div>
 
                         <h1 className="text-[2.5rem] font-extrabold text-slate-900 dark:text-white leading-[1.1] mb-4 tracking-tight">

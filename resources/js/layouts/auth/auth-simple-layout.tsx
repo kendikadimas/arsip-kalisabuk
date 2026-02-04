@@ -25,7 +25,7 @@ export default function AuthSimpleLayout({
                             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 shadow-lg shadow-blue-600/30">
                                 <Archive className="h-6 w-6 text-white" />
                             </div>
-                            <span className="sr-only">ArsipDesa</span>
+                            <span className="sr-only">Sistem Arsip Digital Desa</span>
                         </Link>
 
                         <div className="space-y-1 text-center">
@@ -44,7 +44,7 @@ export default function AuthSimpleLayout({
                     {/* Footer decoration or simplified footer */}
                     <div className="mt-auto pt-4 text-center">
                         <p className="text-xs text-slate-400">
-                            &copy; {new Date().getFullYear()} ArsipDesa
+                            &copy; {new Date().getFullYear()} Sistem Arsip Digital Desa
                         </p>
                     </div>
                 </div>
