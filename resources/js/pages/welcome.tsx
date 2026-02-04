@@ -68,7 +68,7 @@ export default function Welcome() {
                         </h1>
 
                         <p className="text-slate-500 dark:text-slate-400 font-medium mb-10 leading-relaxed text-base">
-                            Pengiriman file, pemindaian pintar, dan penyimpanan aman yang memudahkan administrasi desa Anda.
+                            Penyimpanan aman yang memudahkan administrasi desa Anda.
                         </p>
 
                         <div className="space-y-4 mt-auto">

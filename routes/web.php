@@ -57,7 +57,7 @@ use Google\Service\Drive as GoogleDrive;
 use Google\Service\Drive\DriveFile;
 
 Route::get('dashboard', function (Request $request) {
-    $categories = Category::withCount('archives')->get();
+    $categories = Category::whereNull('parent_id')->withCount('archives')->get();
 
     $query = Archive::with('category');
 
@@ -83,6 +83,7 @@ Route::get('dashboard', function (Request $request) {
 Route::post('/categories', function (Request $request) {
     $validated = $request->validate([
         'name' => 'required|string|max:255',
+        'parent_id' => 'nullable|exists:categories,id',
     ]);
 
     try {
@@ -106,18 +107,28 @@ Route::post('/categories', function (Request $request) {
         $client->addScope(GoogleDrive::DRIVE);
         $service = new GoogleDrive($client);
 
+        // Determine Parent Folder ID
+        $parentDriveId = config('filesystems.disks.google.folder_id');
+        if (!empty($validated['parent_id'])) {
+            $parentCategory = Category::find($validated['parent_id']);
+            if ($parentCategory && $parentCategory->drive_folder_id) {
+                $parentDriveId = $parentCategory->drive_folder_id;
+            }
+        }
+
         // Create Folder in Drive
         $folderMetadata = new DriveFile([
             'name' => $validated['name'],
             'mimeType' => 'application/vnd.google-apps.folder',
-            'parents' => [config('filesystems.disks.google.folder_id')]
+            'parents' => [$parentDriveId]
         ]);
 
         $folder = $service->files->create($folderMetadata, ['fields' => 'id']);
 
         Category::create([
             'name' => $validated['name'],
-            'drive_folder_id' => $folder->id
+            'drive_folder_id' => $folder->id,
+            'parent_id' => $validated['parent_id'] ?? null,
         ]);
 
         return redirect()->back();
@@ -128,10 +139,28 @@ Route::post('/categories', function (Request $request) {
 
 Route::get('/categories/{category}', function (Category $category) {
     $archives = Archive::where('category_id', $category->id)->latest()->get();
+    $children = Category::where('parent_id', $category->id)->withCount('archives')->get();
+
+    // Breadcrumbs
+    $breadcrumbs = [];
+    $curr = $category;
+    while ($curr->parent_id) {
+        $curr = Category::find($curr->parent_id);
+        if ($curr) {
+            array_unshift($breadcrumbs, [
+                'title' => $curr->name,
+                'href' => route('categories.show', $curr->id)
+            ]);
+        }
+    }
+    array_unshift($breadcrumbs, ['title' => 'Beranda', 'href' => route('dashboard')]);
+    $breadcrumbs[] = ['title' => $category->name, 'href' => '#'];
 
     return Inertia::render('categories/show', [
         'category' => $category,
-        'archives' => $archives
+        'archives' => $archives,
+        'children' => $children,
+        'breadcrumbs' => $breadcrumbs
     ]);
 })->middleware(['auth', 'verified'])->name('categories.show');
 
