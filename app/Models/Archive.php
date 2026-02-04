@@ -13,8 +13,14 @@ class Archive extends Model
         'category_id',
         'title',
         'year',
+        'uploaded_at',
+        'file_size',
         'drive_file_id',
         'view_link'
+    ];
+
+    protected $casts = [
+        'uploaded_at' => 'datetime',
     ];
 
     protected $appends = ['view_url'];

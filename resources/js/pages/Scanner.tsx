@@ -53,6 +53,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
     const [formData, setFormData] = useState({
         title: '',
         year: new Date().getFullYear().toString(),
+        uploaded_at: new Date().toISOString().split('T')[0], // Default today
         category_id: ''
     });
 
@@ -459,6 +460,9 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
             payload.append('file', pdfBlob, 'scan.pdf');
             payload.append('title', formData.title || 'Scanned Document');
             payload.append('year', formData.year);
+            if (formData.uploaded_at) {
+                payload.append('uploaded_at', formData.uploaded_at);
+            }
             payload.append('category_id', formData.category_id);
 
             await axios.post('/api/archives', payload, {
@@ -645,21 +649,48 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                 <div className="space-y-4">
                                     <div className="space-y-2">
                                         <Label>Judul Dokumen</Label>
-                                        <Input placeholder="Contoh: SKTM 2024" value={formData.title} onChange={e => setFormData({ ...formData, title: e.target.value })} className="h-12 rounded-xl" />
+                                        <Input
+                                            placeholder="Contoh: Surat Pengantar..."
+                                            value={formData.title}
+                                            onChange={e => setFormData({ ...formData, title: e.target.value })}
+                                            className="h-12 rounded-xl"
+                                        />
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>Tahun</Label>
-                                        <Input type="number" value={formData.year} onChange={e => setFormData({ ...formData, year: e.target.value })} className="h-12 rounded-xl" />
+                                        <Label>Tahun Dokumen</Label>
+                                        <Input
+                                            type="number"
+                                            value={formData.year}
+                                            onChange={e => setFormData({ ...formData, year: e.target.value })}
+                                            className="h-12 rounded-xl"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Tanggal Unggah (Opsional)</Label>
+                                        <Input
+                                            type="date"
+                                            value={formData.uploaded_at || new Date().toISOString().split('T')[0]}
+                                            onChange={e => setFormData({ ...formData, uploaded_at: e.target.value })}
+                                            className="h-12 rounded-xl"
+                                        />
                                     </div>
                                     <div className="space-y-2">
                                         <Label>Kategori</Label>
-                                        <Select value={formData.category_id} onValueChange={(v) => setFormData({ ...formData, category_id: v })}>
-                                            <SelectTrigger className="h-12 rounded-xl"><SelectValue placeholder="Pilih..." /></SelectTrigger>
+                                        <Select
+                                            value={formData.category_id}
+                                            onValueChange={(val) => setFormData({ ...formData, category_id: val })}
+                                        >
+                                            <SelectTrigger className="h-12 rounded-xl">
+                                                <SelectValue placeholder="Pilih Kategori" />
+                                            </SelectTrigger>
                                             <SelectContent>
-                                                {categories.map(c => <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>)}
+                                                {categories.map(c => (
+                                                    <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
+                                                ))}
                                             </SelectContent>
                                         </Select>
                                     </div>
+
                                 </div>
                                 <Button className="w-full h-14 text-lg font-bold rounded-xl bg-blue-600 hover:bg-blue-700 shadow-lg" onClick={generatePDFAndUpload} disabled={pages.length === 0 || !formData.title || !formData.category_id}>
                                     <Upload className="mr-2 h-5 w-5" /> Simpan PDF
