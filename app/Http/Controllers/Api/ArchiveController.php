@@ -55,22 +55,28 @@ class ArchiveController extends Controller
 
     public function store(Request $request)
     {
+        \Log::info('Archive Store Request Started');
+
         $request->validate([
             'category_id' => 'required|exists:categories,id',
             'title' => 'required|string|max:255',
             'year' => 'required|integer|digits:4',
             'uploaded_at' => 'nullable|date', // Optional custom date
-            'file' => 'required|file|mimes:pdf|max:10240',
+            'file' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240',
         ]);
 
         try {
             $category = Category::findOrFail($request->category_id);
-
-            // ... Google Client Init (Keep existing logic, omitted for brevity, verify context matches) ...
-            // RE-INSERTING GOOGLE CLIENT INIT LOGIC HERE AS REPLACEMENT CONTENT MUST BE COMPLETE BLOCK Or TARGET SPECIFIC LINES
+            \Log::info('Category Found: ' . $category->name . ' (ID: ' . $category->id . ')');
 
             if (!class_exists('\Google\Client')) {
-                throw new \Exception('Google API Client not found.');
+                throw new \Exception('Google API Client class not found.');
+            }
+
+            // Check Config
+            if (!config('filesystems.disks.google.client_id') || !config('filesystems.disks.google.client_secret')) {
+                \Log::error('Google Drive Config Missing');
+                throw new \Exception('Google Drive Configuration is missing on server.');
             }
 
             $client = new \Google\Client();
@@ -90,7 +96,10 @@ class ArchiveController extends Controller
             $client->addScope(\Google\Service\Drive::DRIVE);
             $service = new \Google\Service\Drive($client);
 
+            \Log::info('Google Drive Service Initialized');
+
             if (!$category->drive_folder_id) {
+                \Log::info('Creating missing folder for category...');
                 $folderMetadata = new \Google\Service\Drive\DriveFile([
                     'name' => $category->name,
                     'mimeType' => 'application/vnd.google-apps.folder',
@@ -98,25 +107,32 @@ class ArchiveController extends Controller
                 ]);
                 $folder = $service->files->create($folderMetadata, ['fields' => 'id']);
                 $category->update(['drive_folder_id' => $folder->id]);
+                \Log::info('Created Folder ID: ' . $folder->id);
             }
 
             // Get File Info
             $uploadedFile = $request->file('file');
             $fileSize = $uploadedFile->getSize(); // Bytes
+            $mimeType = $uploadedFile->getMimeType();
+
+            \Log::info('File Info: ' . $uploadedFile->getClientOriginalName() . ' | Size: ' . $fileSize . ' | Mime: ' . $mimeType);
+
             $content = file_get_contents($uploadedFile->getRealPath());
 
             // Upload
             $fileMetadata = new \Google\Service\Drive\DriveFile([
-                'name' => $request->title . '.pdf',
+                'name' => $request->title . '.' . $uploadedFile->getClientOriginalExtension(),
                 'parents' => [$category->drive_folder_id]
             ]);
 
             $file = $service->files->create($fileMetadata, [
                 'data' => $content,
-                'mimeType' => 'application/pdf',
+                'mimeType' => $mimeType,
                 'uploadType' => 'multipart',
                 'fields' => 'id, webViewLink, webContentLink'
             ]);
+
+            \Log::info('File Uploaded to Drive. ID: ' . $file->id);
 
             $archive = Archive::create([
                 'category_id' => $category->id,
@@ -132,7 +148,11 @@ class ArchiveController extends Controller
 
         } catch (\Exception $e) {
             \Log::error('Drive Upload Error: ' . $e->getMessage());
-            return response()->json(['error' => 'Upload Error: ' . $e->getMessage()], 500);
+            \Log::error($e->getTraceAsString());
+            return response()->json([
+                'error' => 'Upload Error: ' . $e->getMessage(),
+                'debug_message' => $e->getFile() . ':' . $e->getLine()
+            ], 500);
         }
     }
 }

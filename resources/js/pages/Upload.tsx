@@ -31,6 +31,10 @@ export default function Upload({ categories = [] }: { categories: Category[] }) 
                 alert('Hanya file PDF yang diperbolehkan.');
                 return;
             }
+            if (selectedFile.size > 10 * 1024 * 1024) {
+                alert('Ukuran file melebihi batas 10MB.');
+                return;
+            }
             setFile(selectedFile);
             setFormData(prev => ({ ...prev, title: selectedFile.name.replace(/\.[^/.]+$/, "") }));
             setStage('details');
@@ -56,9 +60,22 @@ export default function Upload({ categories = [] }: { categories: Category[] }) 
                 }
             });
             setStage('success');
-        } catch (error) {
+        } catch (error: any) {
             console.error(error);
-            alert('Upload gagal. Pastikan ukuran file tidak melebihi batas dan coba lagi.');
+            let msg = 'Upload gagal. Pastikan ukuran file tidak melebihi batas dan coba lagi.';
+
+            if (error.response && error.response.data) {
+                if (error.response.data.message) {
+                    msg = `Error: ${error.response.data.message}`;
+                    if (error.response.data.errors) {
+                        const firstError = Object.values(error.response.data.errors)[0];
+                        if (Array.isArray(firstError)) msg += ` (${firstError[0]})`;
+                    }
+                } else if (error.response.data.error) {
+                    msg = `Server Error: ${error.response.data.error}`;
+                }
+            }
+            alert(msg);
             setStage('details');
         }
     };

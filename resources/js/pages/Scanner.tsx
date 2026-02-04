@@ -63,6 +63,13 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
     const validateAndSetFile = (selectedFile: File) => {
         // Allow PDF and Images
         const validTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+
+        // 10MB Limit
+        if (selectedFile.size > 10 * 1024 * 1024) {
+            setErrorMessage('Ukuran file melebihi batas 10MB.');
+            return;
+        }
+
         if (validTypes.includes(selectedFile.type)) {
             setFile(selectedFile);
             setErrorMessage('');
@@ -103,10 +110,27 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                 title: '',
                 year: prev.year // Keep year
             }));
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
             setStatus('error');
-            setErrorMessage('Gagal mengunggah file. Silakan coba lagi.');
+
+            // Try to get specific error message from backend
+            let msg = 'Gagal mengunggah file. Silakan coba lagi.';
+            if (e.response && e.response.data) {
+                if (e.response.data.message) {
+                    msg = `Error: ${e.response.data.message}`;
+                    // Laravel validation errors are often in 'errors' object
+                    if (e.response.data.errors) {
+                        const firstError = Object.values(e.response.data.errors)[0];
+                        if (Array.isArray(firstError)) {
+                            msg += ` (${firstError[0]})`;
+                        }
+                    }
+                } else if (e.response.data.error) {
+                    msg = `Server Error: ${e.response.data.error}`;
+                }
+            }
+            setErrorMessage(msg);
         } finally {
             setIsUploading(false);
         }
