@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Webcam from 'react-webcam';
-import { Camera, Scissors, FileText, Check, Upload, RefreshCw, ChevronLeft, Loader2, X, Archive, RotateCcw, Zap, ZapOff } from 'lucide-react';
+import { Camera, Scissors, FileText, Check, Upload, RefreshCw, ChevronLeft, Loader2, X, Archive, RotateCcw, Zap, ZapOff, Eye, EyeOff } from 'lucide-react';
 import jsPDF from 'jspdf';
 import axios from 'axios';
 import { Head, Link } from '@inertiajs/react';
@@ -141,6 +141,9 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
     // Smoothing History
     const prevQuadsRef = useRef<Array<{ x: number, y: number }[]>>([]);
 
+    // Debug Mode State
+    const [debugMode, setDebugMode] = useState(false);
+
     // Real-time Detection Loop (Interval Based)
     useEffect(() => {
         if (!cvReady || stage !== 'camera') return;
@@ -165,9 +168,9 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                 if (ctx) {
                     ctx.drawImage(video, 0, 0, workWidth, workHeight);
 
-                    let src = null, gray = null, blurred = null, edges = null, dilated = null;
-                    let contours = null, hierarchy = null; // approx is now tmpApprox
-                    let maxContour = null;
+                    let src = null, gray = null, blurred = null, edges = null, closed = null;
+                    let contours = null, hierarchy = null;
+                    let foundQuad = null;
 
                     try {
                         src = cv.imread(processCanvas);
@@ -178,23 +181,22 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         blurred = new cv.Mat();
                         cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
 
-                        // 2. Edge Detection: Canny with lower thresholds for sensitivity
+                        // 2. Edge Detection: Canny with lower upper-threshold (100)
                         edges = new cv.Mat();
-                        cv.Canny(blurred, edges, 30, 120);
+                        cv.Canny(blurred, edges, 30, 100);
 
-                        // 3. Morphology: Dilate to close gaps
-                        dilated = new cv.Mat();
-                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-                        cv.dilate(edges, dilated, kernel, new cv.Point(-1, -1), 2); // 2 iterations
+                        // 3. Morphology: Close gaps (Better than dilate for broken lines)
+                        closed = new cv.Mat();
+                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+                        cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel);
                         kernel.delete();
 
                         // 4. Contour Finding
                         contours = new cv.MatVector();
                         hierarchy = new cv.Mat();
-                        cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+                        cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
                         let maxArea = 0;
-                        let foundQuad = null;
                         const minArea = (workWidth * workHeight) * 0.05; // 5% area threshold
 
                         for (let i = 0; i < contours.size(); ++i) {
@@ -204,7 +206,8 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                             if (area > minArea) {
                                 let peri = cv.arcLength(cnt, true);
                                 let tmpApprox = new cv.Mat();
-                                cv.approxPolyDP(cnt, tmpApprox, 0.02 * peri, true);
+                                // Relax epsilon to 0.04 to tolerate slight curves
+                                cv.approxPolyDP(cnt, tmpApprox, 0.04 * peri, true);
 
                                 if (area > maxArea && tmpApprox.rows === 4 && cv.isContourConvex(tmpApprox)) {
                                     maxArea = area;
@@ -214,7 +217,7 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                                     tmpApprox.delete();
                                 }
                             }
-                            cnt.delete(); // <--- CRITICAL: Delete contour immediately
+                            cnt.delete(); // CRITICAL: Delete contour immediately
                         }
 
                         // 6. Point Sorting & Output
@@ -240,10 +243,6 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
 
                             const top = pts.slice(0, 2).sort((a, b) => a.x - b.x); // Sort Top by X -> TL, TR
                             const bottom = pts.slice(2, 4).sort((a, b) => a.x - b.x); // Sort Bottom by X -> BL, BR
-                            // Wait, strictly bottom right should be last?
-                            // Standard output: TL, TR, BR, BL.
-                            // My sort gives: TL, TR, BL, BR (if bottom sorted by X ascending)
-                            // So bottom[0] is BL, bottom[1] is BR.
 
                             const sortedPts = [top[0], top[1], bottom[1], bottom[0]];
 
@@ -261,41 +260,51 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                             setScanStatus("Mencari Dokumen...");
                         }
 
-                        // Draw Overlay
+                        // Draw Overlay OR Debug View
                         const overlay = canvasRef.current;
                         if (overlay) {
                             overlay.width = video.clientWidth;
                             overlay.height = video.clientHeight;
                             const overlayCtx = overlay.getContext('2d');
                             if (overlayCtx) {
-                                overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-                                if (activeQuad) {
-                                    const drawPts = activeQuad.map(p => ({
-                                        x: p.x * overlay.width,
-                                        y: p.y * overlay.height
-                                    }));
-                                    overlayCtx.beginPath();
-                                    overlayCtx.lineWidth = 4;
-                                    overlayCtx.strokeStyle = manualCorners ? '#fbbf24' : '#10b981';
-                                    overlayCtx.lineCap = 'round';
-                                    overlayCtx.lineJoin = 'round';
-                                    overlayCtx.moveTo(drawPts[0].x, drawPts[0].y);
-                                    overlayCtx.lineTo(drawPts[1].x, drawPts[1].y);
-                                    overlayCtx.lineTo(drawPts[2].x, drawPts[2].y);
-                                    overlayCtx.lineTo(drawPts[3].x, drawPts[3].y);
-                                    overlayCtx.closePath();
-                                    overlayCtx.stroke();
-
-                                    // Handles
-                                    activeQuad.forEach(p => {
-                                        const cx = p.x * overlay.width;
-                                        const cy = p.y * overlay.height;
+                                if (debugMode) {
+                                    // DEBUG VIEW: Render the 'closed' edge detection mat
+                                    let debugImg = new cv.Mat();
+                                    // Resize to fit canvas
+                                    cv.resize(closed, debugImg, new cv.Size(overlay.width, overlay.height));
+                                    cv.imshow(overlay, debugImg);
+                                    debugImg.delete();
+                                } else {
+                                    // NORMAL OVERLAY VIEW
+                                    overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+                                    if (activeQuad) {
+                                        const drawPts = activeQuad.map(p => ({
+                                            x: p.x * overlay.width,
+                                            y: p.y * overlay.height
+                                        }));
                                         overlayCtx.beginPath();
-                                        overlayCtx.arc(cx, cy, 6, 0, 2 * Math.PI);
-                                        overlayCtx.fillStyle = '#fff';
-                                        overlayCtx.fill();
+                                        overlayCtx.lineWidth = 4;
+                                        overlayCtx.strokeStyle = manualCorners ? '#fbbf24' : '#10b981';
+                                        overlayCtx.lineCap = 'round';
+                                        overlayCtx.lineJoin = 'round';
+                                        overlayCtx.moveTo(drawPts[0].x, drawPts[0].y);
+                                        overlayCtx.lineTo(drawPts[1].x, drawPts[1].y);
+                                        overlayCtx.lineTo(drawPts[2].x, drawPts[2].y);
+                                        overlayCtx.lineTo(drawPts[3].x, drawPts[3].y);
+                                        overlayCtx.closePath();
                                         overlayCtx.stroke();
-                                    });
+
+                                        // Handles
+                                        activeQuad.forEach(p => {
+                                            const cx = p.x * overlay.width;
+                                            const cy = p.y * overlay.height;
+                                            overlayCtx.beginPath();
+                                            overlayCtx.arc(cx, cy, 6, 0, 2 * Math.PI);
+                                            overlayCtx.fillStyle = '#fff';
+                                            overlayCtx.fill();
+                                            overlayCtx.stroke();
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -309,20 +318,19 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
                         if (gray) gray.delete();
                         if (blurred) blurred.delete();
                         if (edges) edges.delete();
-                        if (dilated) dilated.delete();
+                        if (closed) closed.delete();
                         if (contours) contours.delete();
                         if (hierarchy) hierarchy.delete();
-                        // approx (tmpApprox) is handled in loop
                         isProcessingRef.current = false;
                     }
                 } else {
                     isProcessingRef.current = false;
                 }
             }
-        }, 150); // Lowered interval slightly
+        }, 150);
 
         return () => clearInterval(interval);
-    }, [stage, cvReady]);
+    }, [stage, cvReady, debugMode]);
 
 
 
@@ -522,7 +530,16 @@ export default function Scanner({ categories = [] }: { categories: Category[] })
 
                                 {/* Torch Button */}
                                 {hasTorch && (
-                                    <div className="absolute top-4 right-4 z-20">
+                                    <div className="absolute top-4 right-4 z-20 flex gap-4">
+                                        <button
+                                            onClick={() => setDebugMode(!debugMode)}
+                                            className={`p-3 rounded-full backdrop-blur-md border transition-all ${debugMode
+                                                ? 'bg-rose-500/80 text-white shadow-[0_0_15px_rgba(244,63,94,0.5)]'
+                                                : 'bg-black/40 border-white/10 text-white hover:bg-black/60'
+                                                }`}
+                                        >
+                                            {debugMode ? <Eye className="w-5 h-5" /> : <EyeOff className="w-5 h-5" />}
+                                        </button>
                                         <button
                                             onClick={toggleTorch}
                                             className={`p-3 rounded-full backdrop-blur-md border transition-all ${torchOn
