@@ -55,16 +55,16 @@ export default function Welcome() {
                     {/* Content Section */}
                     <div className="flex flex-col px-8 pb-12 pt-8 z-20 bg-white dark:bg-slate-900 rounded-t-[2.5rem] shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)] -mt-10">
                         {/* Logo Small */}
-                        <div className="mb-6 flex items-center gap-2 self-start">
+                        {/* <div className="mb-6 flex items-center gap-2 self-start">
                             <div className="h-8 w-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-600/30">
                                 <Archive className="h-4 w-4 text-white" />
                             </div>
                             <span className="font-bold text-slate-900 dark:text-white tracking-tight text-lg">Sistem Arsip Digital Desa</span>
-                        </div>
+                        </div> */}
 
                         <h1 className="text-[2.5rem] font-extrabold text-slate-900 dark:text-white leading-[1.1] mb-4 tracking-tight">
-                            Smart Village <br />
-                            <span className="text-blue-600">Arsip Desa.</span>
+                            Sistem Arsip<br />
+                            <span className="text-blue-600">Digital Desa.</span>
                         </h1>
 
                         <p className="text-slate-500 dark:text-slate-400 font-medium mb-10 leading-relaxed text-base">
